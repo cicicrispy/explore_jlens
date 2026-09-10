@@ -1,0 +1,714 @@
+{
+  "questions": {
+    "report": "What language is this passage written in? Answer with one word.",
+    "hello": "What is the word for 'hello' in the language of this passage? Answer with one word.",
+    "anomaly": "Does this passage switch languages partway through? Answer only Yes or No.",
+    "content": "Is this passage set outdoors? Answer only Yes or No."
+  },
+  "passages": [
+    {
+      "id": "sp_01",
+      "matrix_lang": "es",
+      "intrusion_lang": "fr",
+      "text": "El jardinero se levantaba temprano cada mañana para regar las plantas antes de que saliera el sol. Sus manos estaban curtidas por años de trabajo bajo el calor constante del mediodía. Con cuidado, apartaba las hojas secas y dejaba que las raíces respiraran libremente. Un oiseau vint se percher au bout de la branche et demeura figé longtemps. Al final del día, se sentaba en silencio a contemplar su trabajo.",
+      "sentences": [
+        {
+          "role": "matrix",
+          "char_start": 0,
+          "char_end": 98
+        },
+        {
+          "role": "matrix",
+          "char_start": 99,
+          "char_end": 183
+        },
+        {
+          "role": "matrix",
+          "char_start": 184,
+          "char_end": 268
+        },
+        {
+          "role": "intrusion",
+          "char_start": 269,
+          "char_end": 343
+        },
+        {
+          "role": "matrix",
+          "char_start": 344,
+          "char_end": 409
+        }
+      ],
+      "outdoors": true,
+      "word_counts": {
+        "matrix": 56,
+        "intrusion": 14
+      },
+      "cognate_check": [
+        "oiseau/percher/bout/branche/demeura/figé/longtemps: checked, no close ES equivalents",
+        "revised: dropped 'sur' (homograph with ES 'sur'=south) and 'la plus proche', replaced with 'au bout de la branche' to keep word count in range"
+      ],
+      "notes": ""
+    },
+    {
+      "id": "sp_02",
+      "matrix_lang": "es",
+      "intrusion_lang": "fr",
+      "text": "El pescador reparaba sus redes sentado sobre una piedra plana junto a la orilla del lago. El agua estaba tranquila y apenas se movía bajo la luz de la tarde. De vez en cuando levantaba la mirada para observar los peces que saltaban cerca de la orilla. Le vent souleva doucement quelques feuilles tombées près de la racine, puis tout redevint calme. Guardaba cada pez en una cesta de mimbre que llevaba siempre consigo.",
+      "sentences": [
+        {
+          "role": "matrix",
+          "char_start": 0,
+          "char_end": 89
+        },
+        {
+          "role": "matrix",
+          "char_start": 90,
+          "char_end": 157
+        },
+        {
+          "role": "matrix",
+          "char_start": 158,
+          "char_end": 251
+        },
+        {
+          "role": "intrusion",
+          "char_start": 252,
+          "char_end": 348
+        },
+        {
+          "role": "matrix",
+          "char_start": 349,
+          "char_end": 418
+        }
+      ],
+      "outdoors": true,
+      "word_counts": {
+        "matrix": 59,
+        "intrusion": 15
+      },
+      "cognate_check": [
+        "vent/souleva/feuilles/tombées/racine/redevint: checked, no close ES equivalents",
+        "'calme' vs ES 'calma/calmado': shared root, moderate resemblance, flagged"
+      ],
+      "notes": ""
+    },
+    {
+      "id": "sp_03",
+      "matrix_lang": "es",
+      "intrusion_lang": "fr",
+      "text": "El pastor conducía a sus ovejas por la ladera cubierta de hierba fresca. El aire era frío a pesar de que el sol brillaba con fuerza sobre las rocas. Silbaba una melodía sencilla mientras caminaba, y su perro corría entre las piedras. Au loin, un autre troupeau descendait peu à peu vers une source cachée entre les rochers. Cuando el sol empezaba a bajar, reunía al rebaño y volvía despacio hacia el pueblo.",
+      "sentences": [
+        {
+          "role": "matrix",
+          "char_start": 0,
+          "char_end": 72
+        },
+        {
+          "role": "matrix",
+          "char_start": 73,
+          "char_end": 148
+        },
+        {
+          "role": "matrix",
+          "char_start": 149,
+          "char_end": 233
+        },
+        {
+          "role": "intrusion",
+          "char_start": 234,
+          "char_end": 323
+        },
+        {
+          "role": "matrix",
+          "char_start": 324,
+          "char_end": 407
+        }
+      ],
+      "outdoors": true,
+      "word_counts": {
+        "matrix": 57,
+        "intrusion": 16
+      },
+      "cognate_check": [
+        "troupeau/source/cachée/autre/rochers: checked",
+        "'descendait' vs ES 'descendía': shared verb root, moderate resemblance, flagged",
+        "'rochers' vs ES 'rocas': moderate resemblance, flagged"
+      ],
+      "notes": ""
+    },
+    {
+      "id": "sp_04",
+      "matrix_lang": "es",
+      "intrusion_lang": "fr",
+      "text": "La agricultora recorría las hileras del huerto revisando cada rama con atención. El aroma dulce de la fruta madura llenaba el aire de la mañana. Con una cesta al brazo, elegía solo los frutos más firmes y los guardaba con cuidado. Quelques abeilles bourdonnaient encore autour des fleurs qui n'avaient pas été cueillies. Al mediodía se sentaba bajo un árbol y descansaba antes de continuar con la cosecha.",
+      "sentences": [
+        {
+          "role": "matrix",
+          "char_start": 0,
+          "char_end": 80
+        },
+        {
+          "role": "matrix",
+          "char_start": 81,
+          "char_end": 144
+        },
+        {
+          "role": "matrix",
+          "char_start": 145,
+          "char_end": 230
+        },
+        {
+          "role": "intrusion",
+          "char_start": 231,
+          "char_end": 320
+        },
+        {
+          "role": "matrix",
+          "char_start": 321,
+          "char_end": 405
+        }
+      ],
+      "outdoors": true,
+      "word_counts": {
+        "matrix": 56,
+        "intrusion": 12
+      },
+      "cognate_check": [
+        "bourdonnaient/cueillies/été: checked, no close ES equivalents",
+        "'abeilles' vs ES 'abejas': shared root, moderate resemblance, flagged",
+        "'fleurs' vs ES 'flores': shared root, moderate resemblance, flagged"
+      ],
+      "notes": ""
+    },
+    {
+      "id": "sp_05",
+      "matrix_lang": "es",
+      "intrusion_lang": "fr",
+      "text": "El panadero amasaba la masa sobre la mesa de madera antes del amanecer. El horno de piedra calentaba toda la habitación con un calor constante y agradable. Con movimientos rápidos, formaba pequeñas piezas redondas y las colocaba una junto a otra. Une odeur chaude se répandait partout et attirait des voisins curieux dès le matin. Cuando terminaba, dejaba el pan reposar bajo un paño limpio hasta que subiera bien.",
+      "sentences": [
+        {
+          "role": "matrix",
+          "char_start": 0,
+          "char_end": 71
+        },
+        {
+          "role": "matrix",
+          "char_start": 72,
+          "char_end": 155
+        },
+        {
+          "role": "matrix",
+          "char_start": 156,
+          "char_end": 246
+        },
+        {
+          "role": "intrusion",
+          "char_start": 247,
+          "char_end": 330
+        },
+        {
+          "role": "matrix",
+          "char_start": 331,
+          "char_end": 414
+        }
+      ],
+      "outdoors": false,
+      "word_counts": {
+        "matrix": 55,
+        "intrusion": 14
+      },
+      "cognate_check": [
+        "odeur/chaude/répandait/partout/voisins/matin: checked, no close ES equivalents",
+        "'attirait' vs ES 'atraía': shared root, moderate resemblance, flagged",
+        "'curieux' vs ES 'curioso': shared root, moderate resemblance, flagged"
+      ],
+      "notes": ""
+    },
+    {
+      "id": "sp_06",
+      "matrix_lang": "es",
+      "intrusion_lang": "fr",
+      "text": "La bibliotecaria ordenaba los libros por tema mientras la luz entraba por las ventanas altas. El silencio de la sala solo se rompía por el sonido de las páginas al pasar. Revisaba cada estante con calma, corrigiendo pequeños errores en el orden de los volúmenes. Un vieux fauteuil grinçait chaque fois qu'un visiteur s'y installait pour lire sans faire de bruit. Antes de cerrar, apagaba las luces una por una y comprobaba que todo estuviera en su lugar.",
+      "sentences": [
+        {
+          "role": "matrix",
+          "char_start": 0,
+          "char_end": 93
+        },
+        {
+          "role": "matrix",
+          "char_start": 94,
+          "char_end": 170
+        },
+        {
+          "role": "matrix",
+          "char_start": 171,
+          "char_end": 262
+        },
+        {
+          "role": "intrusion",
+          "char_start": 263,
+          "char_end": 362
+        },
+        {
+          "role": "matrix",
+          "char_start": 363,
+          "char_end": 454
+        }
+      ],
+      "outdoors": false,
+      "word_counts": {
+        "matrix": 62,
+        "intrusion": 16
+      },
+      "cognate_check": [
+        "fauteuil/grinçait/lire/bruit: checked, no close ES equivalents",
+        "'visiteur' vs ES 'visitante': moderate resemblance, flagged",
+        "'installait' vs ES 'instalaba': moderate resemblance, flagged",
+        "originally used 'tranquillement' (too close to ES 'tranquilamente') -- replaced with 'sans faire de bruit'"
+      ],
+      "notes": ""
+    },
+    {
+      "id": "sp_07",
+      "matrix_lang": "es",
+      "intrusion_lang": "fr",
+      "text": "El carpintero lijaba una tabla larga apoyada sobre dos caballetes de madera. El polvo fino flotaba en el aire cada vez que pasaba la herramienta. Medía cada pieza dos veces antes de cortarla, porque un error costaba tiempo y material. Un marteau tomba soudain par terre et fit un bruit sec dans l'atelier vide. Guardaba las herramientas en su lugar antes de apagar la luz y cerrar la puerta.",
+      "sentences": [
+        {
+          "role": "matrix",
+          "char_start": 0,
+          "char_end": 76
+        },
+        {
+          "role": "matrix",
+          "char_start": 77,
+          "char_end": 145
+        },
+        {
+          "role": "matrix",
+          "char_start": 146,
+          "char_end": 234
+        },
+        {
+          "role": "intrusion",
+          "char_start": 235,
+          "char_end": 310
+        },
+        {
+          "role": "matrix",
+          "char_start": 311,
+          "char_end": 391
+        }
+      ],
+      "outdoors": false,
+      "word_counts": {
+        "matrix": 55,
+        "intrusion": 14
+      },
+      "cognate_check": [
+        "marteau/tomba/soudain/atelier/vide: checked, no close ES equivalents",
+        "'sec' vs ES 'seco': moderate resemblance, flagged",
+        "originally used 'pièce' (too close to ES 'pieza') and 'silencieux' (moderate resemblance to 'silencioso') -- replaced with 'atelier vide'"
+      ],
+      "notes": ""
+    },
+    {
+      "id": "sp_08",
+      "matrix_lang": "es",
+      "intrusion_lang": "fr",
+      "text": "La costurera cortaba la tela siguiendo las líneas marcadas con tiza blanca. La máquina de coser hacía un ruido rítmico que llenaba toda la pequeña habitación. De vez en cuando se detenía para revisar una costura y asegurarse de que quedara recta. Des ciseaux argentés traînaient sur une petite table couverte de fils de toutes sortes. Al terminar el vestido, lo colgaba con cuidado y apagaba la lámpara de la mesa.",
+      "sentences": [
+        {
+          "role": "matrix",
+          "char_start": 0,
+          "char_end": 75
+        },
+        {
+          "role": "matrix",
+          "char_start": 76,
+          "char_end": 158
+        },
+        {
+          "role": "matrix",
+          "char_start": 159,
+          "char_end": 246
+        },
+        {
+          "role": "intrusion",
+          "char_start": 247,
+          "char_end": 334
+        },
+        {
+          "role": "matrix",
+          "char_start": 335,
+          "char_end": 414
+        }
+      ],
+      "outdoors": false,
+      "word_counts": {
+        "matrix": 57,
+        "intrusion": 14
+      },
+      "cognate_check": [
+        "ciseaux/argentés/traînaient/fils/sortes: checked, no close ES equivalents",
+        "'couverte' vs ES 'cubierta': moderate resemblance, flagged",
+        "originally listed colours (rejected per constraint 3 example 'color') and 'table' -- kept 'table' (not close to ES 'mesa') but removed colour words entirely"
+      ],
+      "notes": ""
+    },
+    {
+      "id": "fr_01",
+      "matrix_lang": "fr",
+      "intrusion_lang": "es",
+      "text": "L'apiculteur s'approchait des ruches lentement, portant un voile épais sur le visage. Un bourdonnement constant remplissait l'air autour du champ couvert de fleurs jaunes. Il travaillait sans bruit, vérifiant chaque cadre avec des gestes précis et calmes. A lo lejos, un perro ladraba sin parar detrás de una cerca de madera. Après avoir terminé, il refermait doucement chaque ruche et rangeait ses outils dans un sac.",
+      "sentences": [
+        {
+          "role": "matrix",
+          "char_start": 0,
+          "char_end": 85
+        },
+        {
+          "role": "matrix",
+          "char_start": 86,
+          "char_end": 171
+        },
+        {
+          "role": "matrix",
+          "char_start": 172,
+          "char_end": 255
+        },
+        {
+          "role": "intrusion",
+          "char_start": 256,
+          "char_end": 325
+        },
+        {
+          "role": "matrix",
+          "char_start": 326,
+          "char_end": 418
+        }
+      ],
+      "outdoors": true,
+      "word_counts": {
+        "matrix": 52,
+        "intrusion": 14
+      },
+      "cognate_check": [
+        "perro/ladraba/lejos/cerca/madera/detrás/parar: checked, no close FR equivalents found; low-risk sentence overall"
+      ],
+      "notes": ""
+    },
+    {
+      "id": "fr_02",
+      "matrix_lang": "fr",
+      "intrusion_lang": "es",
+      "text": "Le peintre installait son chevalet au bord de l'eau tôt le matin. La lumière changeait sans cesse, et il devait travailler vite pour la capturer. Il mélangeait les couleurs sur une palette usée, cherchant la bonne nuance de vert. Un pequeño bote de madera pasaba despacio, dejando una estela sobre el agua quieta. Quand la lumière faiblissait, il rangeait ses pinceaux et rentrait avant la nuit.",
+      "sentences": [
+        {
+          "role": "matrix",
+          "char_start": 0,
+          "char_end": 65
+        },
+        {
+          "role": "matrix",
+          "char_start": 66,
+          "char_end": 145
+        },
+        {
+          "role": "matrix",
+          "char_start": 146,
+          "char_end": 229
+        },
+        {
+          "role": "intrusion",
+          "char_start": 230,
+          "char_end": 313
+        },
+        {
+          "role": "matrix",
+          "char_start": 314,
+          "char_end": 395
+        }
+      ],
+      "outdoors": true,
+      "word_counts": {
+        "matrix": 52,
+        "intrusion": 14
+      },
+      "cognate_check": [
+        "bote/madera/despacio/estela/agua/quieta: checked, no close FR equivalents",
+        "'pasaba' vs FR 'passait': shared root, moderate resemblance, flagged",
+        "originally used 'tranquila' (too close to FR 'tranquille') -- replaced with 'quieta'"
+      ],
+      "notes": ""
+    },
+    {
+      "id": "fr_03",
+      "matrix_lang": "fr",
+      "intrusion_lang": "es",
+      "text": "Le vigneron marchait entre les rangées, examinant chaque grappe avec attention. La terre sèche craquait sous ses bottes tandis que le soleil montait haut dans le ciel. Il coupait les feuilles inutiles pour laisser entrer plus de lumière sur les fruits. Un grupo de trabajadores vecinos avanzaba por el campo de al lado, cargando cestas pesadas. À la fin de la journée, il notait ses observations dans un petit carnet usé.",
+      "sentences": [
+        {
+          "role": "matrix",
+          "char_start": 0,
+          "char_end": 79
+        },
+        {
+          "role": "matrix",
+          "char_start": 80,
+          "char_end": 167
+        },
+        {
+          "role": "matrix",
+          "char_start": 168,
+          "char_end": 252
+        },
+        {
+          "role": "intrusion",
+          "char_start": 253,
+          "char_end": 344
+        },
+        {
+          "role": "matrix",
+          "char_start": 345,
+          "char_end": 421
+        }
+      ],
+      "outdoors": true,
+      "word_counts": {
+        "matrix": 56,
+        "intrusion": 15
+      },
+      "cognate_check": [
+        "trabajadores/vecinos/cestas/pesadas/lado: checked, no close FR equivalents",
+        "'grupo' vs FR 'groupe': moderate resemblance, flagged",
+        "'avanzaba' vs FR 'avançait': moderate resemblance, flagged",
+        "'campo' vs FR 'champ': moderate resemblance, flagged",
+        "originally used 'parcela' (too close to FR 'parcelle') -- replaced with 'campo de al lado'"
+      ],
+      "notes": ""
+    },
+    {
+      "id": "fr_04",
+      "matrix_lang": "fr",
+      "intrusion_lang": "es",
+      "text": "L'enfant courait dans la cour en poursuivant un ballon rouge et usé. Ses éclats de rire résonnaient contre les murs de pierre qui entouraient l'espace. De temps en temps, il s'arrêtait pour reprendre son souffle avant de repartir en courant. Una anciana miraba la escena desde un banco cercano, sonriendo en silencio. Quand la nuit tombait, ses parents l'appelaient et il rentrait à contrecœur.",
+      "sentences": [
+        {
+          "role": "matrix",
+          "char_start": 0,
+          "char_end": 68
+        },
+        {
+          "role": "matrix",
+          "char_start": 69,
+          "char_end": 151
+        },
+        {
+          "role": "matrix",
+          "char_start": 152,
+          "char_end": 241
+        },
+        {
+          "role": "intrusion",
+          "char_start": 242,
+          "char_end": 317
+        },
+        {
+          "role": "matrix",
+          "char_start": 318,
+          "char_end": 394
+        }
+      ],
+      "outdoors": true,
+      "word_counts": {
+        "matrix": 52,
+        "intrusion": 12
+      },
+      "cognate_check": [
+        "anciana/desde/cercano/sonriendo: checked, no close FR equivalents",
+        "'escena' vs FR 'scène': moderate resemblance, flagged",
+        "'banco' vs FR 'banc': moderate resemblance, flagged",
+        "'silencio' vs FR 'silence': moderate resemblance, flagged",
+        "originally used 'observaba' (too close to FR 'observait') -- replaced with 'miraba'"
+      ],
+      "notes": ""
+    },
+    {
+      "id": "fr_05",
+      "matrix_lang": "fr",
+      "intrusion_lang": "es",
+      "text": "Le potier faisait tourner la roue avec un mouvement régulier du pied. L'argile humide glissait sous ses doigts tandis qu'il formait lentement les parois du vase. De la poussière fine recouvrait ses vêtements et le sol autour de la roue. Un gato pequeño entraba y salía del taller sin que nadie lo notara. Une fois la pièce terminée, il la posait délicatement sur une étagère pour qu'elle sèche.",
+      "sentences": [
+        {
+          "role": "matrix",
+          "char_start": 0,
+          "char_end": 69
+        },
+        {
+          "role": "matrix",
+          "char_start": 70,
+          "char_end": 161
+        },
+        {
+          "role": "matrix",
+          "char_start": 162,
+          "char_end": 236
+        },
+        {
+          "role": "intrusion",
+          "char_start": 237,
+          "char_end": 304
+        },
+        {
+          "role": "matrix",
+          "char_start": 305,
+          "char_end": 394
+        }
+      ],
+      "outdoors": false,
+      "word_counts": {
+        "matrix": 55,
+        "intrusion": 13
+      },
+      "cognate_check": [
+        "gato/pequeño/salía/taller/nadie/notara: checked, no close FR equivalents",
+        "'entraba' vs FR 'entrait': moderate resemblance, flagged",
+        "originally used 'gris' (identical spelling in both languages) and 'atención' (too close to FR 'attention') -- replaced"
+      ],
+      "notes": ""
+    },
+    {
+      "id": "fr_06",
+      "matrix_lang": "fr",
+      "intrusion_lang": "es",
+      "text": "L'horloger travaillait sous une lampe forte, une loupe fixée devant son œil droit. Ses outils minuscules étaient rangés en ligne parfaite sur un tissu sombre. Chaque pièce du mécanisme devait être nettoyée avant d'être remise soigneusement en place. El reloj de la pared marcaba una hora distinta a la de todos los demás. À la fin de la journée, il éteignait la lampe et fermait doucement la porte de l'atelier.",
+      "sentences": [
+        {
+          "role": "matrix",
+          "char_start": 0,
+          "char_end": 82
+        },
+        {
+          "role": "matrix",
+          "char_start": 83,
+          "char_end": 158
+        },
+        {
+          "role": "matrix",
+          "char_start": 159,
+          "char_end": 249
+        },
+        {
+          "role": "intrusion",
+          "char_start": 250,
+          "char_end": 321
+        },
+        {
+          "role": "matrix",
+          "char_start": 322,
+          "char_end": 411
+        }
+      ],
+      "outdoors": false,
+      "word_counts": {
+        "matrix": 55,
+        "intrusion": 15
+      },
+      "cognate_check": [
+        "reloj/pared/hora/distinta/demás: checked, no close FR equivalents",
+        "'marcaba' vs FR 'marquait': shared root, moderate resemblance, flagged"
+      ],
+      "notes": ""
+    },
+    {
+      "id": "fr_07",
+      "matrix_lang": "fr",
+      "intrusion_lang": "es",
+      "text": "La grand-mère remuait la soupe lentement, goûtant de temps en temps avec une petite cuillère. La cuisine sentait bon les légumes et le pain frais posé sur la table. Elle chantonnait doucement, les mains occupées, sans jamais vraiment y penser. Un niño entraba corriendo a la cocina, atraído por el olor que llenaba toda la casa. Quand tout était prêt, elle appelait toute la famille à venir manger.",
+      "sentences": [
+        {
+          "role": "matrix",
+          "char_start": 0,
+          "char_end": 93
+        },
+        {
+          "role": "matrix",
+          "char_start": 94,
+          "char_end": 164
+        },
+        {
+          "role": "matrix",
+          "char_start": 165,
+          "char_end": 243
+        },
+        {
+          "role": "intrusion",
+          "char_start": 244,
+          "char_end": 328
+        },
+        {
+          "role": "matrix",
+          "char_start": 329,
+          "char_end": 398
+        }
+      ],
+      "outdoors": false,
+      "word_counts": {
+        "matrix": 52,
+        "intrusion": 16
+      },
+      "cognate_check": [
+        "niño/corriendo/cocina/olor/llenaba/casa: checked, no close FR equivalents",
+        "'entraba' vs FR 'entrait': moderate resemblance, flagged (same pair as fr_05)",
+        "'atraído' vs FR 'attiré': moderate resemblance, flagged"
+      ],
+      "notes": ""
+    },
+    {
+      "id": "fr_08",
+      "matrix_lang": "fr",
+      "intrusion_lang": "es",
+      "text": "L'étudiant relisait ses notes à la lumière d'une petite lampe posée sur le bureau. La pièce était silencieuse, à part le bruit léger du stylo sur le papier. De temps en temps, il fermait les yeux pour mieux se concentrer sur une idée compliquée. Afuera, alguien cerraba una puerta con fuerza y el sonido lo sobresaltó. Il reprenait sa lecture, déterminé à finir avant la fin de la soirée.",
+      "sentences": [
+        {
+          "role": "matrix",
+          "char_start": 0,
+          "char_end": 82
+        },
+        {
+          "role": "matrix",
+          "char_start": 83,
+          "char_end": 156
+        },
+        {
+          "role": "matrix",
+          "char_start": 157,
+          "char_end": 245
+        },
+        {
+          "role": "intrusion",
+          "char_start": 246,
+          "char_end": 318
+        },
+        {
+          "role": "matrix",
+          "char_start": 319,
+          "char_end": 388
+        }
+      ],
+      "outdoors": false,
+      "word_counts": {
+        "matrix": 57,
+        "intrusion": 12
+      },
+      "cognate_check": [
+        "afuera/alguien/cerraba/puerta/sonido/sobresaltó: checked, no close FR equivalents",
+        "'fuerza' vs FR 'force': moderate resemblance, flagged",
+        "originally ended with 'un instante' (too close to FR 'instant') -- sentence shortened to drop it"
+      ],
+      "notes": ""
+    }
+  ]
+}
