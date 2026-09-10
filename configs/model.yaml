@@ -1,0 +1,9 @@
+# hf_id/revision: the real model used from M1 onward. Qwen3.6-27B is a vision-language checkpoint;
+# only its text decoder is used (see src/jlens_spec/model.py for how the decoder is located).
+hf_id: "Qwen/Qwen3.6-27B"
+revision: "main"
+dtype: "bfloat16"
+
+# standin_hf_id: small Qwen3-family model (<=1B params), same tokenizer family, used for all M0
+# (Phase A) tests and the smoke script.
+standin_hf_id: "Qwen/Qwen3-0.6B"

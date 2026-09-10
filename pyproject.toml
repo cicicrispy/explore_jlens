@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jlens-spec"
+version = "0.1.0"
+description = "J-lens selectivity replication (Stage 0/1)"
+requires-python = ">=3.11"
+dependencies = [
+  "nnsight>=0.8",
+  "transformers",
+  "huggingface_hub",
+  "pyyaml",
+  "pandas",
+  "pyarrow",
+  "matplotlib",
+  "numpy",
+  "pytest",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+  "gpu: requires a CUDA device",
+]

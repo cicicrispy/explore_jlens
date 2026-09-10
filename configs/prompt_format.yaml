@@ -1,0 +1,21 @@
+# Filled by scripts/m0_smoke.py (stand-in tokenizer) and re-derived/re-recorded by
+# scripts/m1_validate.py (real tokenizer, canonical). Do not hand-edit `template_string`.
+#
+# Required suffix, asserted in code (src/jlens_spec/prompts.py):
+#   "<|im_start|>assistant\n<think>\n\n</think>\n\n"
+required_suffix: "<|im_start|>assistant\n<think>\n\n</think>\n\n"
+
+# think_prefill: appended manually only if the tokenizer's apply_chat_template does not accept
+# enable_thinking=False. Left null until a run tells us which path was taken.
+think_prefill: "<think>\n\n</think>\n\n"
+
+# metric_pos rule (see prompts.build_prompt): index of the first token after the think prefill,
+# i.e. len(input_ids) - 1. classes[metric_pos] must equal "template".
+metric_pos_rule: "len(input_ids) - 1, immediately after the think-prefill suffix"
+
+# template_string: exact templated text for one stimulus (stand-in at M0, real tokenizer at M1).
+# NOTE: not filled in yet -- this repo has not been run. scripts/m0_smoke.py will populate this on
+# first execution; if the enable_thinking path or the asserted suffix needs adjustment once real
+# tokenizer output is seen, we refactor here rather than guessing further.
+template_string: null
+source: null   # "m0-standin" or "m1-real", set by whichever script last wrote template_string

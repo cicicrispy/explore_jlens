@@ -1,0 +1,8 @@
+# Layer bands. NOT chosen by code. Filled by the HUMAN after reading M1's band-signature figure
+# (runs/M1/band_signatures.png). M2 and M3 refuse to run while `workspace` is null.
+#
+# Every [a, b] is INCLUSIVE on both ends: [18, 30] = layers 18..30. A band may be one pair or a
+# list of pairs (blocks). The final layer can never be included (it isn't covered by the lens).
+workspace: null    # [onset, motor_onset - 1] -- excludes motor layers by definition
+full: null         # [onset, last lens-covered layer] -- Stage 2
+early_late: null   # [[a, b], [c, d]] -- two blocks, Stage 2

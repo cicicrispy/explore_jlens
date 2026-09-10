@@ -1,0 +1,23 @@
+language_tokens:
+  es: ["Spanish", " Spanish", " spanish", "西班牙语"]
+  fr: ["French",  " French",  " french",  "法语"]
+pairs:                       # form-matched; order = (es, fr)
+  plain:  ["Spanish", "French"]
+  space:  [" Spanish", " French"]
+  lower:  [" spanish", " french"]
+  zh:     ["西班牙语", "法语"]
+controls:
+  # NOT hand-picked. Selected by scripts/m2_loading.py from the clean readout at question positions
+  # (rule below), written to runs/M2/controls_proposed.yaml, approved by the human, then copied here.
+  # control_ineligible applies ONLY to the selection of CONTROL tokens below. It has no effect on
+  # treatment tokens, which come from `pairs` via pair_score. Its purpose: a control must be a
+  # non-label edit, so no language-identity token may be chosen as a control target/pair member.
+  control_ineligible:               # language-identity tokens, any script; human extends after seeing the M2 table
+    ["Spanish"," Spanish"," spanish","French"," French"," french","西班牙语","法语","西班牙","法国",
+     " español"," francés"," espagnol"," français"," langue"," idioma"," lengua"," bilingual"," translation"]
+  label_to_present: {target: null}                   # filled from controls_proposed.yaml
+  big_nonlabel:     {pair: null, norm_scale: 1.0}    # filled from controls_proposed.yaml
+answers:
+  yes: ["Yes"]
+  no:  ["No"]
+  hello: {es: ["Hola"], fr: ["Bonjour"]}

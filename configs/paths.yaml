@@ -1,0 +1,7 @@
+# hf_home: Hugging Face cache dir, keyed by platform. Relative paths are relative to the repo root
+# (scripts chdir there via env.bootstrap()). On the GPU box, point `cuda` at the large disk.
+hf_home:
+  mac: ".hf_cache"
+  cuda: ".hf_cache"   # TODO(human): set to the large disk on the GPU box before M1.
+
+runs_dir: "runs"

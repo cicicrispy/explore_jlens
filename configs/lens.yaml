@@ -1,0 +1,8 @@
+# Filled/verified by scripts/download.py at M1. Left as declared-but-unresolved until then.
+repo: "neuronpedia/jacobian-lens"
+filename: "qwen3.6-27b/jlens/Salesforce-wikitext/Qwen3.6-27B_jacobian_lens_n1000.pt"
+revision_sha: null   # resolved via HfApi().repo_info(...).sha at M1, recorded here verbatim
+meta: {}             # every non-tensor key from the .pt file, dumped verbatim at M1
+layers: []           # filled at M1
+dtype: null          # filled at M1
+coverage_ratio: null # filled at M1
