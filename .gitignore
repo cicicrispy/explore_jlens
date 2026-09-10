@@ -223,3 +223,4 @@ runs/**/*.parquet
 runs/**/*.pt
 .DS_Store
 runs/.*.tmp
+.agents/

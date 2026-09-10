@@ -31,7 +31,9 @@ def test_matrix_lang_inference_from_stimulus_id():
 
 
 def test_cos_in_range_and_rank_at_least_1(standin_model, random_lens):
-    h = torch.randn(4, random_lens.d_model)
+    from jlens_spec import model as model_mod
+
+    h = torch.randn(4, random_lens.d_model, device=model_mod.device_of(standin_model))
     l = random_lens.layers[0]
     v = lens_mod.lens_vectors(standin_model, random_lens, ["the"], l)[0]
     cos = F.cosine_similarity(h, v.unsqueeze(0), dim=-1)

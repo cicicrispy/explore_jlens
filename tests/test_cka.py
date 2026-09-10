@@ -23,12 +23,13 @@ def test_cka_invariant_to_shared_orthogonal_transform(standin_model, random_lens
 
 
 def test_cka_off_diagonal_roughly_uniform_on_random_lens(standin_model, random_lens):
-    """On an unstructured random lens there is no shared geometry between layers, so off-diagonal
-    CKA should not show the block structure a real lens is expected to show. This just reports
-    mean/std for the human to eyeball against the real-lens run at M1 -- not a strict block-free
-    assertion, since a handful of layers with a small random lens can coincidentally correlate."""
+    """Spec: on a random lens the off-diagonal is roughly uniform, so block structure on the real
+    lens can't be a plotting artifact. The LEVEL is not meaningful: a random square Gaussian J
+    roughly preserves the geometry of W_U rows (J J^T ~ d I), so linear CKA between any two random
+    layers is near 1. What must hold is that no pair stands out -- i.e. a small spread."""
     C, layers = cka_mod.cka_matrix(standin_model, random_lens, n_tokens=64, seed=0)
     n = len(layers)
     off = C[~torch.eye(n, dtype=torch.bool)]
     print(f"random-lens off-diagonal CKA: mean={float(off.mean()):.4f} std={float(off.std()):.4f}")
-    assert off.mean() < 0.95
+    assert float(off.std()) < 0.05
+    assert float(off.max() - off.min()) < 0.2

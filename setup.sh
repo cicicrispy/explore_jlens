@@ -46,8 +46,12 @@ esac
 pip install -e .
 
 # 4. hf CLI + skills, gh CLI
-pip install -U "huggingface_hub[cli]"
-hf skills add --claude || echo "WARN: hf skills add --claude failed (non-fatal)"
+pip install -U huggingface_hub  # the `hf` CLI ships with the base package (the [cli] extra no longer exists)
+if [ -d ".agents/skills/hf-cli" ]; then
+  echo "hf-cli skill already installed; skipping 'hf skills add --claude'."
+else
+  hf skills add --claude || echo "WARN: hf skills add --claude failed (non-fatal)"
+fi
 
 if ! command -v gh >/dev/null 2>&1; then
   if [ "$PLATFORM" = "mac" ]; then
@@ -90,7 +94,17 @@ if [ "$PLATFORM" = "cuda" ]; then
   python3 scripts/download.py
 fi
 
-# 8. tests
+# 8. tests. Fetch the stand-in first, with a visible progress bar -- pytest captures output, so a
+# first-time ~1.2 GB download inside a test fixture otherwise looks like a hang.
+python3 - <<'EOF'
+import yaml
+from jlens_spec import env
+env.bootstrap()
+from huggingface_hub import snapshot_download
+cfg = yaml.safe_load(open("configs/model.yaml"))
+print(f"Fetching stand-in {cfg['standin_hf_id']} into HF_HOME (skips files already cached)...")
+snapshot_download(cfg["standin_hf_id"])
+EOF
 pytest tests/ -q
 if [ "$PLATFORM" = "cuda" ]; then
   pytest tests/ -q -m gpu

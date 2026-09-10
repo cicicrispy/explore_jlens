@@ -10,6 +10,7 @@ requires-python = ">=3.11"
 dependencies = [
   "nnsight>=0.8.0rc1",  # spec says >=0.8; only 0.8.0rc1 exists on PyPI, and pip skips pre-releases unless named
   "transformers",
+  "accelerate",  # required by transformers whenever device_map is passed (spec's load_model uses device_map)
   "huggingface_hub",
   "pyyaml",
   "python-dotenv",

@@ -36,10 +36,22 @@ def load_model(cfg: dict, standin: bool = False, device: str | None = None):
     model = LanguageModel(
         hf_id,
         revision=revision,
-        torch_dtype=dtype,
+        dtype=dtype,  # transformers >=5 name (torch_dtype is the deprecated alias)
         device_map=device_map,
         dispatch=True,
     )
+    if device is not None:
+        # The transformers pipeline nnsight builds can move the model to an available accelerator
+        # (MPS on a Mac) regardless of device_map, so enforce the requested device explicitly.
+        model.to(device)
+        actual = model.lm_head.weight.device.type
+        assert actual == torch.device(device).type, f"requested device {device!r}, model is on {actual!r}"
+
+    # Freeze weights (not global grad mode): lens-vector / readout ops on lm_head.weight then build no
+    # autograd graph (which on the 27B model would waste GPU memory), while gradients w.r.t.
+    # activations still work -- which is what fitting/verifying a Jacobian lens would need.
+    for p in model.parameters():
+        p.requires_grad_(False)
 
     tok_cls = type(model.tokenizer).__name__.lower()
     assert "qwen" in hf_id.lower() or "qwen" in tok_cls, (

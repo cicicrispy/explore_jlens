@@ -145,6 +145,42 @@ def test_label_to_present_logs_finite_delta():
     assert all(torch.isfinite(torch.tensor(log.delta_h_norm)) for log in logs)
 
 
+def _trace_setup(standin_model, random_lens):
+    import json
+
+    from jlens_spec import prompts as prompts_mod
+
+    with open("stimuli/stimuli.json") as f:
+        stim = json.load(f)
+    fmt = {"tokenizer": standin_model.tokenizer, "questions": stim["questions"]}
+    p = prompts_mod.build_prompt(stim["passages"][0], "report", fmt)
+    with standin_model.trace(p.input_ids):
+        clean = standin_model.output.logits[0, p.metric_pos].float().save()
+    mask = torch.ones(len(p.input_ids), dtype=torch.bool)
+    mask[:4] = False
+    return p, clean, mask, random_lens.layers[:4]
+
+
+def test_apply_identity_matches_plain_forward(standin_model, random_lens):
+    """The trace + in-place write path with delta = 0 must reproduce the plain forward pass."""
+    p, clean, mask, layers = _trace_setup(standin_model, random_lens)
+    logits, logs = iv.apply(standin_model, random_lens, p, "identity", layers, mask)
+    assert logs
+    assert torch.allclose(logits.cpu(), clean.cpu(), atol=1e-4)
+
+
+def test_apply_edits_actually_propagate(standin_model, random_lens):
+    """A large edit at every content position must change the logits at metric_pos. If nnsight's
+    in-place write silently didn't propagate, every swap would return clean logits and M3 would
+    show a clean-looking null -- this is the guard against that."""
+    p, clean, mask, layers = _trace_setup(standin_model, random_lens)
+    big = {l: torch.full((len(p.input_ids),), 1e3) for l in layers}
+    logits, logs = iv.apply(standin_model, random_lens, p, "random_direction", layers, mask,
+                            target_norms=big, seed=0)
+    assert logs
+    assert not torch.allclose(logits.cpu(), clean.cpu(), atol=1e-2)
+
+
 @pytest.mark.skip(
     reason="requires the mini-paper's reference `run` implementation to compare against; "
     "not available in this repo -- add this test once the human supplies that reference."
