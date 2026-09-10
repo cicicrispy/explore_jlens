@@ -8,10 +8,11 @@ version = "0.1.0"
 description = "J-lens selectivity replication (Stage 0/1)"
 requires-python = ">=3.11"
 dependencies = [
-  "nnsight>=0.8",
+  "nnsight>=0.8.0rc1",  # spec says >=0.8; only 0.8.0rc1 exists on PyPI, and pip skips pre-releases unless named
   "transformers",
   "huggingface_hub",
   "pyyaml",
+  "python-dotenv",
   "pandas",
   "pyarrow",
   "matplotlib",

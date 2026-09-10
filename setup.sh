@@ -57,25 +57,19 @@ if ! command -v gh >/dev/null 2>&1; then
   fi
 fi
 
-# 5. secrets
-if [ -f ".env" ]; then
-  set -a
-  source .env
-  set +a
-else
-  echo "WARN: no .env found at repo root; assuming secrets are already present in the environment."
-fi
-
-if [ -n "${GH_TOKEN:-}" ]; then
-  gh auth setup-git
-else
-  echo "GH_TOKEN not set; skipping 'gh auth setup-git' (assuming git/GitHub access is already configured for this machine)."
-fi
-
-if [ -z "${HF_TOKEN:-}" ]; then
-  echo "ERROR: HF_TOKEN is not set (needed for model/lens download and dataset upload)." >&2
-  exit 1
-fi
+# 5. secrets: .env is read ONLY by Python (jlens_spec.env.bootstrap -> python-dotenv), never
+# sourced into this shell. Values are never printed; only set/unset is checked.
+python3 - <<'EOF'
+import os, subprocess, sys
+from jlens_spec import env
+env.bootstrap()
+if not os.environ.get("HF_TOKEN"):
+    sys.exit("ERROR: HF_TOKEN is not set in .env (needed for model/lens download and dataset upload).")
+if os.environ.get("GH_TOKEN"):
+    subprocess.run(["gh", "auth", "setup-git"], check=True)
+else:
+    print("GH_TOKEN not set; skipping 'gh auth setup-git' (git access assumed already configured).")
+EOF
 
 # 6. HF_HOME per platform, from configs/paths.yaml
 export HF_HOME="$(python3 - <<EOF

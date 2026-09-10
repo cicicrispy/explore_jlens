@@ -22,16 +22,14 @@ editable, and (on `cuda` only) downloads the model + lens and runs the GPU-marke
 Requires `.env` (copy `.env.example`, fill in `HF_TOKEN`; `GH_TOKEN` is optional -- only needed if
 this machine doesn't already have git/GitHub access configured).
 
-**Every new shell, before running any script:** activate the venv and load secrets:
+**Every new shell, before running any script:** `source .venv/bin/activate`.
 
-```bash
-source .venv/bin/activate
-set -a; source .env; set +a
-```
-
-Scripts call `env.bootstrap()` first thing: it changes to the repo root (so all paths are
-repo-relative and scripts work from any directory) and sets `HF_HOME` from `configs/paths.yaml`
-if your shell hasn't, so a fresh shell reuses the cache `setup.sh` filled instead of re-downloading.
+**Never `source .env` in a shell.** Secrets are loaded only from Python: every script (and the
+test suite, and `setup.sh`'s secret check) calls `env.bootstrap()` first, which reads `.env` with
+`python-dotenv` into that process's environment -- values are never printed, and variables already
+set are not overridden. `bootstrap()` also changes to the repo root (so all paths are repo-relative
+and scripts work from any directory) and sets `HF_HOME` from `configs/paths.yaml`, so a fresh shell
+reuses the cache `setup.sh` filled instead of re-downloading.
 
 **No code ever writes to `configs/`.** Values discovered at runtime (resolved lens sha, observed
 chat template, single-token checks, proposed controls) are written under `runs/<M>/`; you copy

@@ -3,7 +3,7 @@ current sha, and record what was found in runs/M1/lens_resolved.yaml.
 
 Nothing under configs/ is written. After this runs, copy `revision_sha` from
 runs/M1/lens_resolved.yaml into configs/lens.yaml by hand (M2/M3 refuse to run without it).
-Requires HF_TOKEN in the environment (source .env first).
+Requires HF_TOKEN in .env (loaded by env.bootstrap(), never sourced in a shell).
 """
 from __future__ import annotations
 

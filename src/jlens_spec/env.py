@@ -18,11 +18,16 @@ def bootstrap() -> None:
 
     - chdir to the repo root, so every path in the codebase is relative to the repo and scripts
       work from any cwd.
-    - set HF_HOME from configs/paths.yaml (if not already set in the shell), so a fresh shell uses
-      the same cache setup.sh downloaded into instead of silently re-downloading to ~/.cache.
-    Secrets are NOT loaded here: source .env in your shell (see README).
+    - load secrets from .env into this process's environment (python-dotenv; values are never
+      printed or logged, and variables already set are not overridden). This is the ONLY place
+      .env is read -- never `source` it in a shell.
+    - set HF_HOME from configs/paths.yaml (if not already set), so a fresh shell uses the same
+      cache setup.sh downloaded into instead of silently re-downloading to ~/.cache.
     """
     os.chdir(_REPO_ROOT)
+    from dotenv import load_dotenv
+
+    load_dotenv(_REPO_ROOT / ".env", override=False)
     if not os.environ.get("HF_HOME"):
         import yaml
 

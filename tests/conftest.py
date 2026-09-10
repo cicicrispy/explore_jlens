@@ -3,7 +3,11 @@ standin_hf_id) forced onto CPU for deterministic tests, and a random lens over i
 import yaml
 import pytest
 
-from jlens_spec import model as model_mod
+from jlens_spec import env
+
+env.bootstrap()  # repo-root cwd + HF_HOME before any huggingface_hub import
+
+from jlens_spec import model as model_mod  # noqa: E402
 from jlens_spec import lens as lens_mod
 
 
