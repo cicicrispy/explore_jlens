@@ -60,18 +60,26 @@ _PAIRS = {"plain": ["Spanish", "French"], "space": [" Spanish", " French"]}
 
 
 def test_m2_from_parquet(tmp_path):
-    """One loading grid per prompt (every pair's es/fr member x every saved layer) + the bars."""
+    """Per prompt a cos grid and a rank grid (every pair's es/fr member x every saved layer) + the bars."""
     for sid in ("sp_01", "fr_01"):
         rows = [{"stimulus_id": sid, "question_key": "report", "pos": pos, "class": cls, "layer": l,
-                 "token": tok, "token_id": 1, "cos": 0.1 * l - 0.2, "rank": 5}
+                 "token": tok, "token_id": 1, "cos": 0.1 * l - 0.2, "rank": 5 + 60 * pos}
                 for pos, cls in ((0, "template"), (1, "instruction"), (4, "question"), (9, "matrix"))
                 for l in (2, 3, 4, 5) for tok in ("Spanish", "French", " Spanish", " French")]
         io_mod.write_parquet(rows, tmp_path / "loadings" / f"{sid}_report.parquet")
     (tmp_path / "figure_params.json").write_text(json.dumps({"band": [3, 4], "pairs": _PAIRS}))
 
     written = figures.make_figures(tmp_path, milestone="M2")
-    assert _files(written) == ["fr_01_report.png", "loading_summary_bars.png", "sp_01_report.png"]
+    assert _files(written) == ["fr_01_report.png", "fr_01_report.png", "loading_summary_bars.png",
+                               "sp_01_report.png", "sp_01_report.png"]
     assert tmp_path / "figures" / "png" / "loadings" / "sp_01_report.png" in written
+    assert tmp_path / "figures" / "png" / "ranks" / "sp_01_report.png" in written
+
+
+def test_layers_text_names_every_block_of_a_split_band():
+    assert figures.layers_text(range(9, 19)) == "9–18"
+    assert figures.layers_text([9, 10, 11, 12, 13, 16, 17, 18]) == "9–13 and 16–18"
+    assert figures.layers_text([2, 5, 6, 9]) == "2, 5–6 and 9"
 
 
 def _m3_run(run_dir, pair="space", lens_sha="L", position_set=("question",)):
@@ -88,7 +96,7 @@ def _m3_run(run_dir, pair="space", lens_sha="L", position_set=("question",)):
                          "delta_c_norm": 0.3, "delta_h_norm": 1.0, "alpha": 1.0, "kind": kind}]
                     recs.append({"stimulus_id": sid, "question_key": q, "direction": d, "kind": kind,
                                  "control_index": ci, "flip": None if kind == "random_direction" and sid == "fr_01"
-                                 else kind == "swap", "margin": 0.5, "intervention_logs": logs,
+                                 else kind == "swap", "margin": 0.5, "clean_margin": 0.2, "intervention_logs": logs,
                                  "pair_name": pair, "lens_sha": lens_sha, "model_revision": "main",
                                  "git_commit": "abc", "position_set": list(position_set),
                                  "logprobs_fp16": np.zeros(8, dtype=np.float16)})
@@ -111,10 +119,24 @@ def test_m3_from_parquet_round_trip(tmp_path):
     (`if not logs` raised) and flip as None/bool objects. Plus one 5x2 mask figure per prompt."""
     _m3_run(tmp_path)
     written = figures.make_figures(tmp_path, formats=("png", "svg"), milestone="M3")
-    names = ["panel_c", "margin_vs_deltac_anomaly", "margin_vs_deltac_report"] + \
+    names = ["panel_c", "flip_heatmap", "margin_change", "margin_vs_deltac_anomaly", "margin_vs_deltac_report"] + \
         [f"{s}_{q}" for s in ("sp_01", "fr_01") for q in ("anomaly", "report")]
     assert _files(written) == sorted(f"{n}.{fmt}" for n in names for fmt in ("png", "svg"))
     assert tmp_path / "figures" / "png" / "masks" / "sp_01_report.png" in written
+
+
+def test_presentation_figures_count_an_edit_made_the_same_in_both_directions_once(tmp_path):
+    d = figures._one_edit_each(figures.read_records(_m3_run(tmp_path)))
+    assert len(d[d["kind"] == "swap"]) == 4 and set(d.loc[d["kind"] == "swap", "direction"]) == {"m2i"}
+    assert len(d[d["kind"] == "label_to_present"]) == 8      # removes a different label in each direction
+
+
+def test_combined_summary_figures(tmp_path):
+    a, b = _m3_run(tmp_path / "a"), _m3_run(tmp_path / "b")
+    paths = figures.combined_summary_figures([a, b], formats=("png",), out_dir=tmp_path / "out")
+    assert _files(paths) == ["flip_heatmap_combined.png", "margin_change_combined.png"]
+    with pytest.raises(ValueError, match="pair_name"):
+        figures.combined_summary_figures([a, _m3_run(tmp_path / "c", pair="plain")], out_dir=tmp_path / "out2")
 
 
 def test_combined_panel_c_refuses_runs_that_differ(tmp_path):

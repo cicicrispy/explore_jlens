@@ -132,6 +132,17 @@ def test_an_older_unfinished_run_is_never_picked_up_by_default(tmp_path, monkeyp
     assert resumed and again.dir == old.dir                # only when named explicitly
 
 
+def test_after_a_code_change_the_next_start_is_a_new_run(tmp_path, monkeypatch, capsys):
+    exp, files, store = _resume_setup(tmp_path, monkeypatch)
+    monkeypatch.setattr(runs.env, "git_commit", lambda: "aaa")
+    a, _ = runs.start_or_resume("M2", exp, files, store, root="runs")
+    monkeypatch.setattr(runs.env, "git_commit", lambda: "bbb")
+    b, resumed = runs.start_or_resume("M2", exp, files, store, root="runs")
+    assert not resumed and b.dir != a.dir and "other code" in capsys.readouterr().out
+    c, resumed = runs.start_or_resume("M2", exp, files, store, root="runs", resume=a.dir)
+    assert resumed and c.dir == a.dir and "other code" in capsys.readouterr().out  # --resume still does, and says so
+
+
 def test_a_finished_run_is_never_resumed(tmp_path, monkeypatch):
     exp, files, store = _resume_setup(tmp_path, monkeypatch)
     a, _ = runs.start_or_resume("M2", exp, files, store, root="runs")

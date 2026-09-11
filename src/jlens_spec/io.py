@@ -260,13 +260,16 @@ class LocalStore:
         return Path(path)
 
 
-def finalize_run(run_dir, summary_lines: list[str], exclude_figures: bool = True, store=None) -> str | None:
+def finalize_run(run_dir, summary_lines: list[str], exclude_figures: bool = True, store=None,
+                 figures_to_upload=()) -> str | None:
     """End of every milestone script. **A run is finished if and only if its summary.md is in the
     store** (the HF dataset; a local stand-in folder for dry runs).
 
-    1. Upload the run folder -- WITHOUT figures/ (no milestone uploads figures; each is redrawn from
-       the uploaded data by scripts/make_figures.py). summary.md does not exist yet, so it cannot go
-       up early (hf may split the folder into several commits -- that's fine).
+    1. Upload the run folder -- WITHOUT figures/ (every figure can be redrawn from the uploaded data
+       by scripts/make_figures.py), except exactly the files in `figures_to_upload` (paths relative
+       to the run folder -- M3 passes its summary figures, never its mask figures). summary.md does
+       not exist yet, so it cannot go up early (hf may split the folder into several commits --
+       that's fine).
     2. Only after (1) has fully succeeded: write summary.md -- `summary_lines` plus the run's
        dataset folder link and (1)'s URL -- and upload it on its own, as the last step.
 
@@ -290,6 +293,8 @@ def finalize_run(run_dir, summary_lines: list[str], exclude_figures: bool = True
 
     try:
         url = store.upload_path(run_dir, exclude_figures=exclude_figures)
+        if figures_to_upload:
+            store.upload_files(run_dir, sorted(figures_to_upload))
     except Exception as e:  # noqa: BLE001 -- recorded in upload_error.txt, not hidden
         fail("uploading the run folder", e)
         return None

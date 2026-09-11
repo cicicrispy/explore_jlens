@@ -243,6 +243,19 @@ def test_finalize_run_never_uploads_figures_by_default(tmp_path, monkeypatch):
     assert store.list_files(run) == {f"{run.as_posix()}/data.parquet", f"{run.as_posix()}/summary.md"}
 
 
+def test_finalize_run_uploads_exactly_the_figures_it_is_given(tmp_path, monkeypatch):
+    """M3 passes its summary figures; its mask figures (and every other figure) stay local."""
+    monkeypatch.chdir(tmp_path)
+    run = Path("runs/M3/r")
+    (run / "figures" / "png" / "masks").mkdir(parents=True)
+    for f in ("figures/png/panel_c.png", "figures/png/masks/sp_01_report.png", "data.parquet"):
+        (run / f).write_text("x")
+    store = io_mod.LocalStore("store")
+    assert io_mod.finalize_run(run, ["# s"], store=store, figures_to_upload=["figures/png/panel_c.png"]) is not None
+    assert store.list_files(run) == {f"{run.as_posix()}/{f}" for f in
+                                     ("data.parquet", "figures/png/panel_c.png", "summary.md")}
+
+
 def test_background_uploader_uploads_exactly_the_files_given(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     run = Path("runs/M3/r")

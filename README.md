@@ -51,7 +51,8 @@ runs/<milestone>/<experiment name>_<UTC start time>/     e.g. runs/M2/loading_20
     manifest.json    fixed facts about the run, written once at the start and never changed:
                      run_id, milestone, experiment file, settings sources, config_hash, git
                      commit, start time
-    figures/png/     figures drawn at the end of the run -- NEVER uploaded (see "Figures")
+    figures/png/     figures drawn at the end of the run -- only an M3 run's summary figures are
+                     uploaded (see "Figures")
     ...              the run's data files (parquet etc.)
     summary.md       the milestone summary -- written LAST, see "When is a run finished?"
 ```
@@ -60,8 +61,8 @@ runs/<milestone>/<experiment name>_<UTC start time>/     e.g. runs/M2/loading_20
 every milestone script (`io.finalize_run`):
 
 1. the run folder is uploaded to the HF dataset (`orbitsoferis/jlens-specificity`), **without
-   `figures/`**. `summary.md` doesn't exist yet, so it can't go up early. (`hf upload` may split a
-   larger folder into several commits; that's fine.)
+   `figures/`** (except an M3 run's summary figures). `summary.md` doesn't exist yet, so it can't go
+   up early. (`hf upload` may split a larger folder into several commits; that's fine.)
 2. only after that upload has fully succeeded, `summary.md` is written -- including the run's HF
    folder link and the upload's URL -- and uploaded on its own, as the last step.
 
@@ -82,8 +83,11 @@ changes that run; the edit applies to the next new run. Code is not copied: ever
 the git commit that produced it. `config_hash` in the manifest and in the rows is a hash of the
 `settings/` folder. Every saved row also carries the run's `run_id`.
 
-**Commit before running a milestone.** Records store the git commit; if code or configs differ
-from it, the hash is suffixed `-dirty`.
+**Commit before running a milestone.** Records store the git commit, taken **once, when the script
+starts** (the code a process runs is the code it loaded, even if files change while it runs). If
+code or configs differ from the commit, the stamp is `<commit>-dirty-<fingerprint>`, the
+fingerprint being a hash of the uncommitted changes -- so two different sets of edits never share a
+stamp.
 
 ## Long runs: one file per prompt, uploads as you go, resume (M2, M3)
 
@@ -93,17 +97,19 @@ that never blocks the GPU (`io.BackgroundUploader`; upload failures are printed,
 with the next upload, and reported in the summary; the final folder upload is the backstop).
 
 **Resume.** Running the same command again:
-- **resumes** the experiment's **most recent** run if it is unfinished (no `summary.md` on HF). A
+- **resumes** the experiment's **most recent** run if it is unfinished (no `summary.md` on HF) **and
+  the code is the same as when it started** (the same commit stamp, uncommitted edits included). A
   prompt whose files are on HF is done and skipped; a prompt whose files exist only on this machine is
   recomputed ("if a file exists on only one machine, it does not exist"); files that are on HF but not
   here (e.g. computed on another machine) are downloaded at the end, before the figures and summary.
-- starts a **new** run if the most recent one is finished. An older unfinished run is never picked
-  up by default.
-- `--fresh` always starts a new run; `--resume runs/M3/<run folder>` resumes exactly that one (a
-  finished run is never resumed -- it is never changed).
+- starts a **new** run if the most recent one is finished, or if the code has changed since it
+  started (don't `git pull` during a run; after a code change you get a fresh run). An older
+  unfinished run is never picked up by default.
+- `--fresh` always starts a new run; `--resume runs/M3/<run folder>` resumes exactly that one, even
+  after a code change (it says so, and that launch's rows carry the new stamp; the summary lists
+  every commit that produced rows). A finished run is never resumed -- it is never changed.
 - A resumed run keeps using **its own settings copy**; settings files you changed in `configs/` since
-  it started are printed, not applied. Code changes are allowed (every row carries its git commit;
-  the summary lists every commit that produced rows).
+  it started are printed, not applied.
 - A new machine works the same way: the run's settings and manifest are fetched from HF.
 
 **On the GPU box, run inside tmux**, so a dropped SSH connection doesn't kill the run:
@@ -196,9 +202,16 @@ saved to `runs/M2/loading_<time>/`:
 
 Then, from the saved files: `pair_scores.yaml` (every pair's `pair_score` over the workspace band and
 the winner -- M3's treatment pair), the accuracy table (in the summary), `checksums.txt`, and the
-figures: one grid per prompt (`figures/png/loadings/<stimulus>_<question>.png`: every pair's Spanish
-and French member, every layer, the workspace band dashed) plus `loading_summary_bars`. About 0.5 GB
-per run, mostly `topk/`. Control tokens are **not** picked in M2 (see M3).
+figures (not uploaded):
+- per prompt, `figures/png/loadings/<stimulus>_<question>.png` -- cos(h, v_token) -- and
+  `figures/png/ranks/<stimulus>_<question>.png` -- the token's rank in the lens readout, log scale,
+  a white line at rank 100: every pair's Spanish and French member, every layer, the workspace
+  layers dashed. Each kind uses **one color scale for the whole run**, so a color means the same in
+  every prompt's figure;
+- `loading_summary_bars`: mean cos per position class and token, averaged over the workspace layers,
+  in three rows -- all prompts, the Spanish passages, the French passages.
+
+About 0.5 GB per run, mostly `topk/`. Control tokens are **not** picked in M2 (see M3).
 
 ## M3 (Phase B -- after M2)
 
@@ -225,10 +238,19 @@ and used the same M2 run, band, position set and `skip_first`. No code applies a
 **Controls are picked automatically** (no review) at the start of each positives run and saved in
 its `controls/` folder (`selection.yaml`, `candidates.parquet`, `pairs.parquet`); the anomaly run
 reuses them. The rules are in `src/jlens_spec/controls.py` (module docstring): candidates come from
-M2's top-100 readout at the positions the treatment edits, within the band; each control must reach
-at least 100% of the treatment's layer coverage and |Δc| in all four treatment rows (passage
-language x direction), else at least 75%, else the closest remaining (flagged "below 75%"); among
-those, the one closest to the treatment wins. 3 label_to_present targets + 3 big_nonlabel pairs.
+M2's top-100 readout at the positions the treatment edits, within the band. There are **16 checks**
+(4 treatment rows -- passage language x direction -- x 4 questions; each averages over its 8
+passages, the edited positions and the band's layers). A control must reach at least 100% of the
+treatment's layer coverage and |Δc|, else at least 75%, else the closest remaining (flagged "below
+75%"); among those, the one closest to the treatment wins.
+- **label_to_present is picked separately for each check** (a cell uses its own check's 3 tokens),
+  and only among tokens that **lower** the removed label in that check (the swap exchanges
+  coordinates, so the label becomes the token's coordinate -- lower only if the token's is lower).
+  A token that doesn't lower it is used only if a check has too few that do, flagged.
+- **big_nonlabel is one set of 3 pairs for every check**, so its rules must hold in all 16. A pair is
+  scaled to exactly the treatment's ||Δh||, and after that its |Δc| depends only on how far apart the
+  two tokens' lens vectors are compared with the treatment's two -- so pairs are judged on the |Δc|
+  they will have after scaling.
 Tokenizer special tokens and tokens that don't re-tokenize to themselves are never controls; they
 are listed separately in `selection.yaml` (`excluded_special`). To exclude more tokens, extend
 `controls.control_ineligible` in `configs/tokens.yaml`; the next positives run picks it up.
@@ -242,19 +264,34 @@ reports: the invariant-7 grid check, planned-but-unchanged positions, the two di
 (identity should be identical; swap, random_direction and big_nonlabel are the same edit in both
 directions because the swap is symmetric -- only label_to_present differs), each control's measured
 edit size vs the treatment's, per-control flip rates, and 10 sampled raw cells per question x
-direction x kind. Figures: `panel_c`, `margin_vs_deltac_<question>`, and one mask figure per prompt
-(5 kinds x 2 directions, from where the stream actually changed). About 0.3 GB per run, mostly the
-full-vocabulary logprobs.
+direction x kind. Figures:
+- `panel_c` (the spec's: flip rate with Wilson 95% intervals and mean margin ± SE, per question x
+  kind x direction x passage language) and `margin_vs_deltac_<question>`;
+- `flip_heatmap`: rows = questions, columns = the five kinds, shade = flip rate, flipped/total in each
+  box (swap, big_nonlabel, random_direction, identity count each passage once -- both directions are
+  the same edit; label_to_present counts both directions);
+- `margin_change`: how far each edit moved the answer -- per question, margin with the edit minus
+  the clean margin, in that question's units (e.g. log P(Yes) − log P(No)); bar = mean over
+  passages, dots = passages, colored by passage language;
+- one mask figure per prompt (5 kinds x 2 directions, from where the stream actually changed).
 
-**Combined panel c** (e.g. positives + anomaly of one position set), from the saved records only:
+**The summary figures (everything but the mask figures) are uploaded with the run**; the mask
+figures are not. About 0.3 GB per run, mostly the full-vocabulary logprobs.
+
+**Combined figures** (e.g. positives + anomaly of one position set, so all four questions are in one
+figure), from the saved records only:
 
 ```bash
 python scripts/combine_panel_c.py runs/M3/positives_question_20260912-031000 runs/M3/anomaly_question_20260912-041000
 ```
 
-It writes a new **local** folder `runs/M3/combined_<position set>_<time>/` (`sources.json` +
-`figures/`), never uploaded -- copy it off the machine yourself (e.g. sftp). It refuses runs that
-differ in pair, band, position set, lens or model.
+It writes a new folder `runs/M3/combined_<position set>_<time>/` (`sources.json` + `figures/`:
+`panel_c_combined`, `flip_heatmap_combined`, `margin_change_combined`) and, **if every run in it is
+finished, uploads it to HF** at the same path (a dry run's goes to its local stand-in,
+`runs/dryrun/_hf/`, never to HF). If a run is unfinished, the folder stays local and it says so. It
+refuses runs that differ in pair, band, position set, lens or model, and a mix of dry and real runs.
+On another machine it needs each run's `records/`, `figure_params.json`, `manifest.json` and
+`settings/` (it prints the `hf download` command if they're missing).
 
 ## Dry run (Mac, before the GPU)
 
@@ -296,14 +333,17 @@ the two instruction sentences and the blank lines between the parts), and `templ
 template around it: `<|im_start|>user`, `<|im_end|>`, the assistant/think prefix -- never edited).
 M3's position sets: `question` = {question}; `message` = {instruction, question, matrix, intrusion}.
 
-## Figures (regenerable without the model; never uploaded)
+## Figures (regenerable without the model)
 
 Compute and plotting are separate. Every milestone script saves the data behind each figure to its
 run folder (parquet, plus a small `figure_params.json` for the few non-tabular values such as the
 band used), and then builds its figures **from those files** via `figures.make_figures` -- never from
-in-memory results. **No figure is uploaded to HF** (M0's existing HF files are left as they are): the
-data is, so any figure can be redrawn later, in any format, on any machine that has the run folder
-(e.g. pulled from the HF dataset), with no model or GPU:
+in-memory results. **The only figures uploaded to HF are an M3 run's summary figures** (`panel_c`,
+`margin_vs_deltac_*`, `flip_heatmap`, `margin_change` -- not its mask figures) **and the combined
+figures** (`scripts/combine_panel_c.py`); no other milestone's figures; M0's existing HF files are
+left as they are. The data always is, so any figure can be
+redrawn later, in any format, on any machine that has the run folder (e.g. pulled from the HF
+dataset), with no model or GPU:
 
 ```bash
 python scripts/make_figures.py runs/M2/loading_20260912-031000 --format pdf
@@ -324,7 +364,12 @@ character, to **Noto Sans SC** (free, SIL Open Font License), which is **downloa
 Fonts' GitHub repo** (`google/fonts`, file `ofl/notosanssc/NotoSansSC[wght].ttf`) the first time a
 figure is drawn on a machine, and cached in `$HF_HOME/fonts/`. Nothing is installed and nothing is
 stored in git or on HF. The download is pinned to one commit of that repo and checked against the
-file's sha256, so it is always the same file.
+file's sha256, so it is always the same file. That file holds every weight in one (a "variable"
+font), which matplotlib can't use: it would take the lightest weight, draw Chinese Thin and print
+`findfont: Failed to find font weight normal, now using 100`. So, the first time, a Regular-weight
+copy is made from it with fontTools (which comes with matplotlib) and cached next to it
+(`NotoSansSC-Regular.ttf`). Chinese appears in the 27B's M2 figures (the zh pair, '西班牙语' /
+'法语') and M1's positive-control figures; the dry run's stand-in drops the zh pair.
 
 **If Google moves or renames the file:** update `CJK_FONT_URL` (and `CJK_FONT_SHA256`, the file's
 new sha256) at the top of `src/jlens_spec/figures.py`. If the font can't be downloaded (e.g. no
@@ -394,13 +439,18 @@ unknown, not "no effect" -- and `panel_c` leaves those out of the flip rates.
   (report, hello) and, after you read its summary, an anomaly run (anomaly, content).
 - **Controls are automatic, with no human approval** (the spec's `controls_proposed.yaml` review step
   is gone; `tokens.yaml` keeps only the blocklist): matched to the treatment on layer coverage and
-  |Δc| (100%, else 75%, else closest, flagged), 3 per kind, one set per position set shared by all
-  four treatment rows, candidates from the top **100** readout (the spec's 25 is superseded; its
-  "in half the prompts" rule is replaced by the coverage bar).
+  |Δc| (100%, else 75%, else closest, flagged), 3 per kind, candidates from the top **100** readout
+  (the spec's 25 is superseded; its "in half the prompts" rule is replaced by the coverage bar).
+  label_to_present: 3 tokens per row x question check, each lowering the removed label in its check
+  (the spec's "loading below the label" intent); big_nonlabel: one set for all 16 checks, judged on
+  the |Δc| it has after scaling to the treatment's ||Δh|| (decided 2026-09-11).
 - **Both directions are kept** for every kind, although swap / big_nonlabel / random_direction are
   the same edit in both (the swap is symmetric); the summary reports their agreement.
 - **M2 records every lens layer** (the spec: the workspace band) and picks no controls.
-- **No figures on HF** for any milestone.
+- **Figures on HF: only an M3 run's summary figures and the combined figures** (decided 2026-09-11)
+  -- no mask figures, no other milestone's figures.
+- **Two extra M3 figures**, `flip_heatmap` and `margin_change`, next to the spec's `panel_c` (which is
+  unchanged).
 
 ## Known open items (flagged during writing, need your input)
 

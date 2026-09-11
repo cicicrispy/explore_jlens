@@ -22,6 +22,37 @@ def test_require_env_never_echoes(monkeypatch, capsys):
     assert "supersecretvalue" not in out.err
 
 
+def test_git_commit_fingerprints_uncommitted_changes(tmp_path, monkeypatch):
+    """Two different sets of uncommitted edits must never share a stamp (resume relies on it)."""
+    import subprocess
+
+    def git(*args):
+        subprocess.run(["git", *args], check=True, capture_output=True)
+
+    monkeypatch.chdir(tmp_path)
+    git("init", "-q")
+    git("config", "user.email", "t@example.com")
+    git("config", "user.name", "t")
+    git("config", "commit.gpgsign", "false")
+    (tmp_path / "a.py").write_text("x = 1\n")
+    git("add", "a.py")
+    git("commit", "-qm", "c")
+    clean = env.git_commit()
+    assert "-dirty" not in clean and len(clean) >= 40
+    (tmp_path / "a.py").write_text("x = 2\n")
+    one = env.git_commit()
+    (tmp_path / "a.py").write_text("x = 3\n")
+    two = env.git_commit()
+    assert one.startswith(clean + "-dirty-") and two.startswith(clean + "-dirty-") and one != two
+    (tmp_path / "a.py").write_text("x = 2\n")
+    assert env.git_commit() == one                  # the same edits -> the same stamp
+    (tmp_path / "runs").mkdir()
+    (tmp_path / "runs" / "out.txt").write_text("r")
+    assert env.git_commit() == one                  # what scripts write into runs/ never counts
+    (tmp_path / "b.py").write_text("new\n")
+    assert env.git_commit() not in (one, clean)     # an untracked file does
+
+
 def test_expand_band_single_pair_is_inclusive():
     assert env.expand_band([18, 21]) == [18, 19, 20, 21]
 

@@ -52,19 +52,29 @@ def require_env(name: str) -> None:
 
 
 def git_commit() -> str:
-    """Current commit hash, suffixed '-dirty' if any code/config differs from it (tracked edits or
-    untracked non-ignored files, excluding runs/, which scripts write into). Records carrying a
-    '-dirty' hash were NOT produced by the code at that commit -- commit before running milestones.
-    Returns 'unknown' outside a git repo."""
+    """The code on disk, as a stamp: the current commit hash, suffixed '-dirty-<fingerprint>' if any
+    code/config differs from it (tracked edits or untracked non-ignored files, excluding runs/,
+    which scripts write into). The fingerprint -- the first 12 hex digits of a sha256 over those
+    uncommitted changes -- tells two different sets of uncommitted edits apart, so two equal stamps
+    mean the same code. Records carrying '-dirty-...' were NOT produced by the code at that commit --
+    commit before running milestones. Scripts take this stamp ONCE, when they start (the code a
+    process runs is the code it loaded), and every row of that launch carries it. Returns 'unknown'
+    outside a git repo."""
     try:
-        sha = subprocess.run(
-            ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True
-        ).stdout.strip()
-        status = subprocess.run(
-            ["git", "status", "--porcelain", "--", ".", ":(exclude)runs"],
-            capture_output=True, text=True, check=True,
-        ).stdout.strip()
-        return f"{sha}-dirty" if status else sha
+        def git(*args) -> bytes:
+            return subprocess.run(["git", *args], capture_output=True, check=True).stdout
+
+        sha = git("rev-parse", "HEAD").decode().strip()
+        if not git("status", "--porcelain", "--", ".", ":(exclude)runs").strip():
+            return sha
+        h = hashlib.sha256(git("diff", "HEAD", "--binary", "--", ".", ":(exclude)runs"))
+        untracked = git("ls-files", "--others", "--exclude-standard", "-z", "--", ".", ":(exclude)runs")
+        for name in sorted(n for n in untracked.split(b"\0") if n):
+            h.update(b"\0" + name + b"\0")
+            p = Path(os.fsdecode(name))
+            if p.is_file():
+                h.update(p.read_bytes())
+        return f"{sha}-dirty-{h.hexdigest()[:12]}"
     except Exception:
         return "unknown"
 

@@ -125,8 +125,10 @@ def open_run(run_dir) -> Run:
 # summary.md in the store): prompts whose files are in the store are done; anything that exists only
 # on this machine is recomputed (a file on one machine only does not count); files that are in the
 # store but not here are downloaded at the end. A resumed run keeps using its own settings copy --
-# edits to configs/ since it started are printed, not applied -- and code changes are allowed (every
-# row carries the git commit that produced it).
+# edits to configs/ since it started are printed, not applied. It is only resumed by default if the
+# code is the same as when it started (same env.git_commit() stamp, uncommitted edits included);
+# after a code change the next start is a NEW run. `--resume <folder>` still resumes it, and every
+# row carries the stamp of the launch that produced it.
 
 _RUN_ID = re.compile(r"^(?P<name>.+)_(?P<stamp>\d{8}-\d{6})(?:-(?P<n>\d+))?$")
 
@@ -196,14 +198,17 @@ def sync_down(run_dir, store) -> list[str]:
 def start_or_resume(milestone: str, experiment_path, settings_files: list, store, root=RUNS_ROOT,
                     fresh: bool = False, resume=None) -> tuple[Run, bool]:
     """The run a long script should work in, and whether it is a resumed one:
-    - `resume` (a run folder): that run. Refuses if it is already finished.
+    - `resume` (a run folder): that run, even if the code has changed since it started (says so).
+      Refuses if it is already finished.
     - `fresh`: always a new run folder.
-    - otherwise: the experiment's MOST RECENT run if it is unfinished, else a new run. An older
-      unfinished run is never picked up by default (pass its folder with `resume`).
+    - otherwise: the experiment's MOST RECENT run if it is unfinished AND was started with the same
+      code (the same env.git_commit() stamp), else a new run. An older unfinished run is never
+      picked up by default (pass its folder with `resume`).
     Prints which, and -- when resuming -- which settings files have changed in configs/ since (the
     run keeps using its own copy)."""
     if resume is not None and fresh:
         raise ValueError("pass either --resume or --fresh, not both")
+    code_now = env.git_commit()
     if resume is not None:
         run_dir = Path(resume)
     elif fresh:
@@ -216,6 +221,15 @@ def start_or_resume(milestone: str, experiment_path, settings_files: list, store
         if run_dir is not None and is_finished(run_dir, store):
             print(f"The most recent run of '{name}' ({run_dir.name}) is finished -- starting a new run.", flush=True)
             run_dir = None
+        if run_dir is not None:
+            fetch_settings(run_dir, store)
+            started_with = open_run(run_dir).manifest().get("git_commit") \
+                if (run_dir / "manifest.json").exists() else None
+            if started_with != code_now:
+                print(f"The most recent run of '{name}' ({run_dir.name}) is unfinished, but it was started "
+                      f"with other code ({started_with}; the code is now {code_now}) -- starting a new run. "
+                      f"To continue it anyway: --resume {run_dir}", flush=True)
+                run_dir = None
 
     if run_dir is None:
         run = start_run(milestone, experiment_path, settings_files, root=root)
@@ -233,6 +247,9 @@ def start_or_resume(milestone: str, experiment_path, settings_files: list, store
         raise SystemExit(f"{run_dir} is a {run.milestone} run, not {milestone}")
     changed = settings_diff(run)
     print(f"RESUMING unfinished run {run.dir} (settings from its own copy in settings/).", flush=True)
+    if run.manifest().get("git_commit") != code_now:
+        print(f"  NOTE: this run was started with other code ({run.manifest().get('git_commit')}; the code is "
+              f"now {code_now}) -- the rows from this launch carry the new stamp.", flush=True)
     if changed:
         print(f"  NOTE: these settings files changed in configs/ since the run started; the run keeps "
               f"its copy, the changes apply to a new run (--fresh): {', '.join(changed)}", flush=True)

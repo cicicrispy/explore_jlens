@@ -71,6 +71,7 @@ def main() -> None:
     ap.add_argument("--device", default="mps" if torch.backends.mps.is_available() else "cpu",
                     help="dry runs only: mps or cpu (a real run uses the GPU via device_map='auto')")
     args = ap.parse_args()
+    git_commit = env.git_commit()  # the code this process loaded; every row of this launch carries it
 
     exp0 = pipeline.read_experiment(args.experiment)
     dry = pipeline.is_dryrun(exp0)
@@ -103,7 +104,6 @@ def main() -> None:
                 if len(tok.encode(t, add_special_tokens=False)) == 1]
     pairs, dropped_pairs = loading_mod.single_token_pairs(tok, tokens_raw["pairs"])
     assert pairs, f"no pair in tokens.yaml is single-token under this tokenizer (dropped: {dropped_pairs})"
-    git_commit = env.git_commit()
 
     jobs = [(s, q) for s in stim["passages"] for q in stim["questions"]]
     done = runs_mod.uploaded_files(run.dir, store)
@@ -163,8 +163,8 @@ def main() -> None:
                         "pair_score_argmax": best_pair, "pair_words": pairs[best_pair],
                         "pairs_nan_score": nan_pairs, "pairs_dropped_not_single_token": dropped_pairs},
                        f, sort_keys=False, allow_unicode=True)
-    (run.dir / "figure_params.json").write_text(json.dumps({"band": workspace, "pairs": pairs}, indent=2,
-                                                           ensure_ascii=False))
+    (run.dir / "figure_params.json").write_text(json.dumps({"band": workspace, "band_name": "workspace",
+                                                            "pairs": pairs}, indent=2, ensure_ascii=False))
     written = figures.make_figures(run.dir)
     accuracy = answers.groupby("question_key")["correct"].agg(["mean", "sum", "count"])
 
@@ -179,7 +179,7 @@ def main() -> None:
         "## 1. Environment",
         f"- Environment: {pipeline.environment(exp)}",
         f"- git commit(s) that produced the rows: {', '.join(commits)}"
-        + (" -- more than one: the run was resumed after a code change" if len(commits) > 1 else ""),
+        + (" -- more than one: the run was resumed with --resume after a code change" if len(commits) > 1 else ""),
         f"- resumed: {resumed}; experiment file: {args.experiment}; config_hash (every file in settings/): "
         f"{run.config_hash()}",
         f"- model: {model_cfg['standin_hf_id'] + ' (stand-in)' if dry else model_cfg['hf_id'] + ' @ ' + model_cfg['revision']}",
@@ -195,7 +195,7 @@ def main() -> None:
         "- Accuracy (answer-set argmax vs the passage's ground truth; margins are logprob margins):",
         "  | question | correct | of | rate |", "  |---|---|---|---|",
         *[f"  | {q} | {int(r['sum'])} | {int(r['count'])} | {r['mean']:.3f} |" for q, r in accuracy.iterrows()],
-        f"- pair_score over the workspace band {workspace[0]}..{workspace[-1]}: "
+        f"- pair_score over the workspace layers {figures.layers_text(workspace)}: "
         + ", ".join(f"{n} = {s:.4f}" if s == s else f"{n} = NaN" for n, s in pair_scores.items())
         + f"; argmax = {best_pair!r} {pairs[best_pair]} -- M3's treatment pair (pair_scores.yaml).",
         f"- Pairs dropped (not single tokens): {dropped_pairs or 'none'}.",
@@ -203,10 +203,11 @@ def main() -> None:
         "run, from this run's topk/ files.",
         "- NOT checked: any scientific reading of these numbers.", "",
         "## 3. Figures",
-        f"- {len(written)} figure files in {run.dir}/figures/png/ (64 loading grids: every pair's Spanish and "
-        "French member, every layer, workspace band dashed; plus loading_summary_bars). Figures are NOT "
-        f"uploaded; redraw from the data anywhere, without the model: `python scripts/make_figures.py {run.dir} "
-        "--format pdf`", "",
+        f"- {len(written)} figure files in {run.dir}/figures/png/: per prompt, loadings/ (cos(h, v_token)) and "
+        "ranks/ (the token's rank in the lens readout; white line = rank 100) -- every pair's Spanish and French "
+        "member, every layer, workspace layers dashed, one color scale per kind for the whole run; plus "
+        "loading_summary_bars (all prompts / Spanish passages / French passages). M2 figures are NOT uploaded; "
+        f"redraw from the data anywhere, without the model: `python scripts/make_figures.py {run.dir} --format pdf`", "",
         "## 4. Anomalies / open questions",
         f"- Background uploads: {uploader.n_uploads} ok, {uploader.n_failures} failed"
         + (f"; last error: {bg_error}" if bg_error else "") + (f"; still queued: {sorted(uploader.pending())}"

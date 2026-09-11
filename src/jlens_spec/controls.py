@@ -8,38 +8,52 @@ Each treatment swap exchanges the language being REMOVED (s) with the one SWAPPE
 treatment pair (es word, fr word) there are four treatment rows per position set:
     passage es, m2i: s = es word, t = fr word        passage es, i2m: s = fr word, t = es word
     passage fr, m2i: s = fr word, t = es word        passage fr, i2m: s = es word, t = fr word
-(runner._resolve_pair_words is the same mapping.) ONE set of controls serves all four rows, so every
-rule below must hold in every row.
+(runner._resolve_pair_words is the same mapping.) With four questions (the positives run uses
+report + hello, the anomaly run anomaly + content) that makes 4 x 4 = 16 CHECKS ("report_es_m2i",
+...); a check's prompts are the 8 passages of that row's passage language, asked that question. The
+label_to_present controls are picked FOR EACH CHECK SEPARATELY (a cell uses the controls of its own
+check); the big_nonlabel controls are ONE set shared by every check, so their rules must hold in
+each of the 16.
 
 Measures -- always within the run's band only, at the positions the treatment edits:
 - layer coverage of token x on one prompt = the fraction of the band's layers at which x is among the
   lens readout's top-`pool_k` tokens at >= 1 edited position (from M2's saved top-100 readout). A
-  row's value = the mean over the prompts of that row's passage language (8 passages x 4 questions).
+  check's value = the mean over its prompts.
 - |Δc| of a swap between tokens s and x at one position and layer = ||flip(c) - c|| with
   c = pinv([v_s, v_x]) h -- the same quantity M3 logs as delta_c_norm -- here from a CLEAN forward
-  pass (M3 then measures the real, clamped value). Mean over edited positions x band layers per
-  prompt, then over the row's prompts.
+  pass (M3 then measures the real value). A check's value = the mean over its prompts x edited
+  positions x band layers -- the same average the M3 summary reports as the measured ratio.
 
 Candidates: every token in the top-`pool_k` readout at the edited positions within the band, on any
 of the 64 prompts, minus `control_ineligible` tokens and any token whose text contains one of them
 (case-insensitive). Tokenizer special tokens and tokens whose text does not re-tokenize to exactly
 themselves are never used as controls; they are listed separately (`excluded_special`).
 
-label_to_present -- keeps the removed label s; the control token x stands in for the swapped-in t:
-    coverage ratio = cov(x) / cov(t),   |Δc| ratio = |Δc|(s, x) / |Δc|(s, t),   in every row.
+label_to_present -- keeps the removed label s; the control token x stands in for the swapped-in t,
+    and must LOWER the label: the swap exchanges coordinates, so the label's coordinate c_s becomes
+    c_x, which lowers it only if c_x < c_s. Per check: x qualifies only if the mean of (c_s - c_x)
+    over the check's prompts x edited positions x band layers is positive (the same average as
+    below); among those, coverage ratio = cov(x) / cov(t) and |Δc| ratio = |Δc|(s, x) / |Δc|(s, t)
+    set the tier. A token that does not lower the label is used only if a check has too few that
+    do, flagged "does not lower the label".
 big_nonlabel -- a control pair (a, b), a standing in for s and b for t. The swap is symmetric and the
-    four rows swap the roles of the two language tokens, so each member must reach the bar against
-    both: coverage ratio of a member = cov(member) / max(cov(s), cov(t)), in every row. The edit is
-    scaled to at least the treatment's ||Δh|| at every position and layer (norm_scale), so only
-    coverage has a bar; among pairs in the same tier, the one whose UNSCALED |Δc| is closest to the
-    treatment's is preferred (so the scale factor stays near 1). Pairs are formed from the
-    `pool_size` members with the widest coverage; the chosen pairs share no token.
+    rows swap the roles of the two language tokens, so each member must reach the bar against both:
+    coverage ratio of a member = cov(member) / max(cov(s), cov(t)), in every check. The edit is
+    scaled to norm_scale x the treatment's ||Δh|| at every position and layer, and after that
+    scaling its |Δc| no longer depends on the state h at all: at each layer it is
+    norm_scale x (||v_s - v_t|| / ||v_a - v_b||) x the treatment's |Δc| there. So the pair's |Δc|
+    ratio (the |Δc| it will actually have, over the treatment's, averaged as above) comes from the
+    clean pass's treatment |Δc| per layer and the lens vectors -- no forward pass per pair. Pairs
+    are formed from the `pool_size` members with the widest coverage; the chosen pairs share no token.
 
 Tiers -- selection never stops:
-    1 = every ratio >= bars[0] (100%) in every row;  2 = every ratio >= bars[1] (75%);
-    3 = the closest remaining, flagged "below 75%".
-Within tiers 1-2 the CLOSEST to the treatment is preferred: the smallest mean over the four rows of
-|log(|Δc| ratio)|. Tier 3 is ordered by its smallest ratio, largest first (closest to the bar).
+    1 = every ratio (coverage and |Δc|) >= bars[0] (100%) -- in its check (label_to_present) or in
+    every check (big_nonlabel);  2 = every ratio >= bars[1] (75%);  3 = the closest remaining,
+    flagged "below 75%";  4 (label_to_present only) = does not lower the label, flagged.
+Within tiers 1-2 the CLOSEST to the treatment is preferred: the smallest |log(|Δc| ratio)| (for
+big_nonlabel its mean over the checks). Tier 3 is ordered by its smallest ratio, largest first.
+A treatment token that is never in the top-`pool_k` in a check makes that coverage ratio infinite:
+any candidate has at least that much coverage, so coverage sets no bar there.
 """
 from __future__ import annotations
 
@@ -53,7 +67,9 @@ from . import lens as lens_mod
 from . import model as model_mod
 
 ROWS = ("es_m2i", "es_i2m", "fr_m2i", "fr_i2m")
-TIER_LABELS = {1: ">=100%", 2: ">=75%", 3: "below 75%"}
+TIER_LABELS = {1: ">=100%", 2: ">=75%", 3: "below 75%", 4: "does not lower the label"}
+# controls/selection.yaml layout; an anomaly run refuses a positives run's file with another version.
+SELECTION_VERSION = 3
 
 
 def treatment_rows(pair_words) -> list[dict]:
@@ -66,6 +82,11 @@ def treatment_rows(pair_words) -> list[dict]:
         {"row": "fr_m2i", "matrix_lang": "fr", "direction": "m2i", "removed": fr, "swapped_in": es},
         {"row": "fr_i2m", "matrix_lang": "fr", "direction": "i2m", "removed": es, "swapped_in": fr},
     ]
+
+
+def group_name(matrix_lang: str, question: str) -> str:
+    """The prompts of one passage language asked one question, e.g. 'es_report'."""
+    return f"{matrix_lang}_{question}"
 
 
 def _tier(worst: np.ndarray, bars) -> np.ndarray:
@@ -109,15 +130,15 @@ def coverage(topk, edited_classes, band_layers, skip_first: int, pool_k: int) ->
                          "token_id": tok.astype(np.int64), "n_layers": n_layers.astype(np.int64)})
 
 
-def coverage_by_language(cov: pd.DataFrame, prompts_by_lang: dict, n_band_layers: int) -> pd.DataFrame:
-    """Mean coverage fraction per passage language: rows = token_id, columns cov_es / cov_fr. A token
-    absent from a prompt counts 0 for that prompt. `prompts_by_lang` = {"es": [(stimulus_id,
-    question_key), ...], "fr": [...]}."""
+def coverage_by_group(cov: pd.DataFrame, prompts_by_group: dict, n_band_layers: int) -> pd.DataFrame:
+    """Mean coverage fraction per group of prompts: rows = token_id, one column cov_<group> per
+    group. A token absent from a prompt counts 0 for that prompt. `prompts_by_group` = {"es_report":
+    [(stimulus_id, question_key), ...], ...} (any group names)."""
     out = {}
-    for lang, keys in prompts_by_lang.items():
+    for group, keys in prompts_by_group.items():
         keyset = {f"{s}\t{q}" for s, q in keys}
         sub = cov[(cov["stimulus_id"] + "\t" + cov["question_key"]).isin(keyset)]
-        out[f"cov_{lang}"] = sub.groupby("token_id")["n_layers"].sum() / (n_band_layers * len(keys))
+        out[f"cov_{group}"] = sub.groupby("token_id")["n_layers"].sum() / (n_band_layers * len(keys))
     return pd.DataFrame(out).fillna(0.0)
 
 
@@ -151,38 +172,51 @@ def classify_tokens(token_ids, tokenizer, ineligible) -> pd.DataFrame:
 
 def big_nonlabel_pool(cands: pd.DataFrame, treat: dict, pool_size: int, bars) -> pd.DataFrame:
     """The `pool_size` big_nonlabel members with the best coverage tier, then the widest mean
-    coverage. `cands`: eligible candidates with cov_<row> columns; `treat[row]` has cov_removed and
-    cov_swapped_in. Adds columns member_worst_cov_ratio and member_tier."""
+    coverage. `cands`: eligible candidates with cov_<check> columns; `treat[check]` has cov_removed
+    and cov_swapped_in. Adds columns member_worst_cov_ratio and member_tier."""
     ratios = []
-    for r in ROWS:
-        ref = max(treat[r]["cov_removed"], treat[r]["cov_swapped_in"])
-        ratios.append(np.full(len(cands), np.inf) if ref == 0 else cands[f"cov_{r}"].to_numpy() / ref)
+    for check, t in treat.items():
+        ref = max(t["cov_removed"], t["cov_swapped_in"])
+        ratios.append(np.full(len(cands), np.inf) if ref == 0 else cands[f"cov_{check}"].to_numpy() / ref)
     worst = np.min(np.stack(ratios), axis=0) if len(cands) else np.array([])
     out = cands.assign(member_worst_cov_ratio=worst, member_tier=_tier(worst, bars),
-                       mean_cov=cands[[f"cov_{r}" for r in ROWS]].mean(axis=1))
+                       mean_cov=cands[[f"cov_{check}" for check in treat]].mean(axis=1))
     return out.sort_values(["member_tier", "mean_cov"], ascending=[True, False]).head(pool_size)
 
 
 # ------------------------------------------------------------------------- |Δc| estimates
 
 
+def _signed_diff(a, b, c, x, y):
+    """c_s - c_x for the swap basis V = [v_s, v_x], from dot products: a = v_s.v_s, b = v_s.v_x,
+    c = v_x.v_x, x = h.v_s, y = h.v_x (c = pinv(V) h = (V^T V)^-1 V^T h). Positive = the swap LOWERS
+    the coordinate of s (it becomes c_x). Broadcasts."""
+    return ((c + b) * x - (a + b) * y) / (a * c - b * b)
+
+
 def _abs_dc(a, b, c, x, y):
-    """|Δc| = sqrt(2) |c_s - c_x| for the swap basis V = [v_s, v_x], from dot products: a = v_s.v_s,
-    b = v_s.v_x, c = v_x.v_x, x = h.v_s, y = h.v_x (c = pinv(V) h = (V^T V)^-1 V^T h). Broadcasts."""
-    D = a * c - b * b
-    return math.sqrt(2.0) * torch.abs(((c + b) * x - (a + b) * y) / D)
+    """|Δc| = sqrt(2) |c_s - c_x| (see _signed_diff). Broadcasts."""
+    return math.sqrt(2.0) * torch.abs(_signed_diff(a, b, c, x, y))
 
 
 def estimate_delta_c(model, lens, prompts, masks, band_layers, cand_ids, pair_ids, pool_ids) -> dict:
-    """Clean-pass |Δc| estimates, averaged over each prompt's edited positions x band layers.
+    """Clean-pass |Δc| estimates at each prompt's edited positions x band layers, plus the lens-vector
+    distances the big_nonlabel rule needs.
 
     prompts/masks: parallel lists (Prompt, bool mask over its positions). cand_ids: label_to_present
     candidates. pair_ids: (es word id, fr word id) of the treatment pair. pool_ids: big_nonlabel pool.
-    Returns per prompt (lists parallel to `prompts`):
-      ltp_removed_es / ltp_removed_fr: np.array[len(cand_ids)] -- |Δc|(removed label, candidate)
-      treat: float -- |Δc|(es word, fr word), the treatment swap
-      pairs: list of (i, j) index pairs into pool_ids, and pair_dc: np.array[n_pairs] per prompt.
-    A candidate (nearly) parallel to the label gives a division by ~0 -> inf/NaN; callers drop NaN."""
+    Returns (per-prompt arrays have one row per prompt, in `prompts` order):
+      ltp_removed_es / ltp_removed_fr: [prompts, cands] -- mean |Δc|(removed label, candidate)
+      ltp_lowering_es / ltp_lowering_fr: [prompts, cands] -- mean (c_label - c_candidate); positive =
+          the swap lowers the removed label's coordinate
+      treat: [prompts] -- mean |Δc|(es word, fr word), the treatment swap
+      treat_es_minus_fr: [prompts] -- mean (c_es - c_fr) in the treatment's basis
+      treat_by_layer: [prompts, band layers] -- the treatment's |Δc| SUMMED over the edited
+          positions at each band layer (treat = its row sum / n_positions_x_layers)
+      n_positions_x_layers: [prompts]
+      treat_dist: [band layers] -- ||v_es - v_fr|| at each band layer
+      pairs: list of (i, j) index pairs into pool_ids;  pair_dist: [pairs, band layers] -- ||v_a - v_b||
+    A candidate (nearly) parallel to the label gives a division by ~0 -> inf/NaN; callers drop those."""
     dev = model_mod.device_of(model)
     # h at the edited positions for every band layer, per prompt, kept on the CPU until used.
     hs = []
@@ -194,127 +228,164 @@ def estimate_delta_c(model, lens, prompts, masks, band_layers, cand_ids, pair_id
                 saved[l] = model_mod.layer_output(model, l).float()[0, pos].save()
         hs.append({l: saved[l].detach().cpu() for l in band_layers})
 
-    n_p, n_c = len(prompts), len(cand_ids)
+    n_p, n_c, n_l = len(prompts), len(cand_ids), len(band_layers)
     pairs = [(i, j) for i in range(len(pool_ids)) for j in range(i + 1, len(pool_ids))]
-    acc = {"es": np.zeros((n_p, n_c)), "fr": np.zeros((n_p, n_c)), "treat": np.zeros(n_p),
-           "pairs": np.zeros((n_p, len(pairs)))}
+    acc = {"es": np.zeros((n_p, n_c)), "fr": np.zeros((n_p, n_c)), "es_lower": np.zeros((n_p, n_c)),
+           "fr_lower": np.zeros((n_p, n_c)), "treat_by_layer": np.zeros((n_p, n_l)), "treat_signed": np.zeros(n_p)}
     counts = np.zeros(n_p)
+    treat_dist = np.zeros(n_l)
+    pair_dist = np.zeros((len(pairs), n_l))
     pi = torch.tensor([i for i, _ in pairs], dtype=torch.long)
     pj = torch.tensor([j for _, j in pairs], dtype=torch.long)
-    for l in band_layers:
+    for li, l in enumerate(band_layers):
         Vc = lens_mod.lens_vectors(model, lens, list(cand_ids), l).to(dev) if n_c else None  # [T, d]
         ves, vfr = lens_mod.lens_vectors(model, lens, list(pair_ids), l).to(dev)
-        Vq = lens_mod.lens_vectors(model, lens, list(pool_ids), l).to(dev) if len(pool_ids) else None
         a_es, a_fr, g = ves @ ves, vfr @ vfr, ves @ vfr
+        treat_dist[li] = float(torch.sqrt(torch.clamp(a_es + a_fr - 2 * g, min=0.0)))
+        if pairs:
+            Vq = lens_mod.lens_vectors(model, lens, list(pool_ids), l).to(dev)             # [Q, d]
+            G = Vq @ Vq.T
+            pair_dist[:, li] = torch.sqrt(torch.clamp(G[pi, pi] + G[pj, pj] - 2 * G[pi, pj], min=0.0)).cpu().numpy()
         if Vc is not None:
             cc = (Vc * Vc).sum(-1)
             b_es, b_fr = Vc @ ves, Vc @ vfr
-        if Vq is not None and pairs:
-            G = Vq @ Vq.T
-            pa_, pc_, pb_ = G[pi, pi], G[pj, pj], G[pi, pj]
         for k in range(n_p):
             H = hs[k][l].to(dev)                                   # [P, d]
             if H.shape[0] == 0:
                 continue
             x_es, x_fr = H @ ves, H @ vfr                          # [P]
-            acc["treat"][k] += float(_abs_dc(a_es, g, a_fr, x_es, x_fr).sum())
+            sd = _signed_diff(a_es, g, a_fr, x_es, x_fr)           # c_es - c_fr
+            acc["treat_by_layer"][k, li] = float(math.sqrt(2.0) * sd.abs().sum())
+            acc["treat_signed"][k] += float(sd.sum())
             if Vc is not None:
                 Y = H @ Vc.T                                       # [P, T]
-                acc["es"][k] += _abs_dc(a_es, b_es, cc, x_es[:, None], Y).sum(0).cpu().numpy()
-                acc["fr"][k] += _abs_dc(a_fr, b_fr, cc, x_fr[:, None], Y).sum(0).cpu().numpy()
-            if Vq is not None and pairs:
-                Yq = H @ Vq.T                                      # [P, Q]
-                acc["pairs"][k] += _abs_dc(pa_, pb_, pc_, Yq[:, pi], Yq[:, pj]).sum(0).cpu().numpy()
+                sd_es = _signed_diff(a_es, b_es, cc, x_es[:, None], Y)   # c_es - c_x
+                sd_fr = _signed_diff(a_fr, b_fr, cc, x_fr[:, None], Y)   # c_fr - c_x
+                acc["es"][k] += (math.sqrt(2.0) * sd_es.abs()).sum(0).cpu().numpy()
+                acc["fr"][k] += (math.sqrt(2.0) * sd_fr.abs()).sum(0).cpu().numpy()
+                acc["es_lower"][k] += sd_es.sum(0).cpu().numpy()
+                acc["fr_lower"][k] += sd_fr.sum(0).cpu().numpy()
             counts[k] += H.shape[0]
     denom = np.maximum(counts, 1)
     return {"ltp_removed_es": acc["es"] / denom[:, None], "ltp_removed_fr": acc["fr"] / denom[:, None],
-            "treat": acc["treat"] / denom, "pairs": pairs, "pair_dc": acc["pairs"] / denom[:, None],
-            "n_positions_x_layers": counts}
+            "ltp_lowering_es": acc["es_lower"] / denom[:, None], "ltp_lowering_fr": acc["fr_lower"] / denom[:, None],
+            "treat": acc["treat_by_layer"].sum(axis=1) / denom, "treat_by_layer": acc["treat_by_layer"],
+            "treat_es_minus_fr": acc["treat_signed"] / denom,
+            "n_positions_x_layers": counts, "treat_dist": treat_dist, "pairs": pairs, "pair_dist": pair_dist}
 
 
-def by_language(values: np.ndarray, langs: list[str], lang: str) -> np.ndarray:
-    """Mean over the prompts whose passage language is `lang` (axis 0)."""
-    idx = [i for i, g in enumerate(langs) if g == lang]
-    return np.asarray(values)[idx].mean(axis=0)
-
-
-def with_coverage(cands: pd.DataFrame, cov_lang: pd.DataFrame, pair_words, pair_ids) -> tuple[pd.DataFrame, dict]:
-    """Step 1 (no model): per-row coverage. Adds cov_<row> to `cands` (token_id, token, ...) and
-    returns treat = {row: {removed, swapped_in, cov_removed, cov_swapped_in, ...}}."""
+def with_coverage(cands: pd.DataFrame, cov_group: pd.DataFrame, pair_words, pair_ids,
+                  questions) -> tuple[pd.DataFrame, dict]:
+    """Step 1 (no model): per-check coverage. Adds cov_<check> to `cands` (token_id, token, ...) and
+    returns treat = {check: {row, question, group, matrix_lang, direction, removed, swapped_in,
+    cov_removed, cov_swapped_in}}, one check per question x row ("report_es_m2i", ...)."""
     word_id = dict(zip(pair_words, pair_ids))
 
-    def cov_of(tid, lang):
-        col = f"cov_{lang}"
-        return float(cov_lang[col].get(tid, 0.0)) if col in cov_lang else 0.0
+    def cov_of(ids, group):
+        col = f"cov_{group}"
+        if col not in cov_group:
+            return np.zeros(len(ids))
+        return cov_group[col].reindex(ids).fillna(0.0).to_numpy(dtype=float)
 
-    cands = cands.copy()
-    treat = {}
-    for row in treatment_rows(pair_words):
-        r, lang = row["row"], row["matrix_lang"]
-        treat[r] = {**row, "cov_removed": cov_of(word_id[row["removed"]], lang),
-                    "cov_swapped_in": cov_of(word_id[row["swapped_in"]], lang)}
-        cands[f"cov_{r}"] = [cov_of(t, lang) for t in cands["token_id"]]
-    return cands, treat
+    treat, cols = {}, {}
+    for q in questions:
+        for row in treatment_rows(pair_words):
+            check, group = f"{q}_{row['row']}", group_name(row["matrix_lang"], q)
+            treat[check] = {**row, "question": q, "group": group,
+                            "cov_removed": float(cov_of([word_id[row["removed"]]], group)[0]),
+                            "cov_swapped_in": float(cov_of([word_id[row["swapped_in"]]], group)[0])}
+            cols[f"cov_{check}"] = cov_of(cands["token_id"].to_numpy(), group)
+    return pd.concat([cands.reset_index(drop=True), pd.DataFrame(cols)], axis=1), treat
 
 
-def with_delta_c(cands: pd.DataFrame, treat: dict, est: dict, langs: list[str], pair_words,
-                 pool_ids) -> tuple[pd.DataFrame, dict, pd.DataFrame]:
-    """Step 2 (after estimate_delta_c): per-row |Δc|. `cands` must be in the order `est` was computed
-    for; `langs` = each estimated prompt's passage language. Adds dc_<row> to `cands` and `dc` to
-    each treat row; returns the pair table (a_id, b_id, dc_<row>) for big_nonlabel."""
+def with_delta_c(cands: pd.DataFrame, treat: dict, est: dict, groups: list[str], pair_words,
+                 pool_ids, norm_scale: float) -> tuple[pd.DataFrame, dict, pd.DataFrame]:
+    """Step 2 (after estimate_delta_c): per-check |Δc|. `cands` must be in the order `est` was computed
+    for; `groups` = each estimated prompt's group name (group_name(passage language, question)).
+    Adds dc_<check> (the label_to_present swap's |Δc|) and lower_<check> (mean c_label - c_candidate;
+    positive = it lowers the removed label) to `cands`, and `dc` and `lowers_by` (the treatment's own
+    mean c_removed - c_swapped_in, for the record) to each treat check; returns the big_nonlabel pair
+    table (a_id, b_id, dc_<check>), where dc is the |Δc| the pair's swap will have AFTER it is
+    scaled to norm_scale x the treatment's ||Δh|| (module docstring)."""
     es_word = pair_words[0]
-    cands, treat = cands.copy(), {r: dict(v) for r, v in treat.items()}
+    groups = np.asarray(groups)
+    treat = {k: dict(v) for k, v in treat.items()}
     pairs = pd.DataFrame({"a_id": [int(pool_ids[i]) for i, _ in est["pairs"]],
                           "b_id": [int(pool_ids[j]) for _, j in est["pairs"]]}, dtype=np.int64)
-    for row in treatment_rows(pair_words):
-        r, lang = row["row"], row["matrix_lang"]
-        removed_key = "ltp_removed_es" if row["removed"] == es_word else "ltp_removed_fr"
-        treat[r]["dc"] = float(by_language(est["treat"], langs, lang))
-        cands[f"dc_{r}"] = by_language(est[removed_key], langs, lang) if len(cands) else []
-        pairs[f"dc_{r}"] = by_language(est["pair_dc"], langs, lang) if len(pairs) else []
+    denom = np.maximum(est["n_positions_x_layers"], 1)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ratio = est["treat_dist"][None, :] / est["pair_dist"]                         # [pairs, layers]
+        pair_mean = norm_scale * (est["treat_by_layer"] @ ratio.T) / denom[:, None]  # [prompts, pairs]
+    c_cols, p_cols = {}, {}
+    for check, t in treat.items():
+        idx = groups == t["group"]
+        if not idx.any():
+            raise ValueError(f"no estimated prompt belongs to {t['group']} (check {check})")
+        removes_es = t["removed"] == es_word
+        t["dc"] = float(est["treat"][idx].mean())
+        t["lowers_by"] = float((1 if removes_es else -1) * est["treat_es_minus_fr"][idx].mean())
+        c_cols[f"dc_{check}"] = est["ltp_removed_es" if removes_es else "ltp_removed_fr"][idx].mean(axis=0) \
+            if len(cands) else np.zeros(0)
+        c_cols[f"lower_{check}"] = est["ltp_lowering_es" if removes_es else "ltp_lowering_fr"][idx].mean(axis=0) \
+            if len(cands) else np.zeros(0)
+        p_cols[f"dc_{check}"] = pair_mean[idx].mean(axis=0) if len(pairs) else np.zeros(0)
+    cands = pd.concat([cands.reset_index(drop=True), pd.DataFrame(c_cols)], axis=1)
+    pairs = pd.concat([pairs, pd.DataFrame(p_cols)], axis=1)
     return cands, treat, pairs
 
 
 # ------------------------------------------------------------------------------ selection
 
 
-def select_label_to_present(cands: pd.DataFrame, treat: dict, n: int, bars) -> pd.DataFrame:
-    """Rank label_to_present candidates and return the top `n` (see the module docstring).
-    `cands` columns: token_id, token, cov_<row>, dc_<row> for each row; `treat[row]` has
-    cov_swapped_in and dc. Adds per-row ratios, worst_ratio, tier, tier_label, closeness."""
-    c = cands.copy()
-    ratios = []
-    for r in ROWS:
-        ref_cov = treat[r]["cov_swapped_in"]
-        c[f"cov_ratio_{r}"] = np.inf if ref_cov == 0 else c[f"cov_{r}"] / ref_cov
-        c[f"dc_ratio_{r}"] = c[f"dc_{r}"] / treat[r]["dc"]
-        ratios += [c[f"cov_ratio_{r}"], c[f"dc_ratio_{r}"]]
-    c = c[np.isfinite(c[[f"dc_ratio_{r}" for r in ROWS]]).all(axis=1)]
-    c["worst_ratio"] = c[[f"cov_ratio_{r}" for r in ROWS] + [f"dc_ratio_{r}" for r in ROWS]].min(axis=1)
-    c["tier"] = _tier(c["worst_ratio"].to_numpy(), bars)
-    c["closeness"] = np.mean([np.abs(np.log(c[f"dc_ratio_{r}"].clip(lower=1e-12))) for r in ROWS], axis=0)
-    c["order"] = np.where(c["tier"] < 3, c["closeness"], -c["worst_ratio"])
-    c = c.sort_values(["tier", "order"]).head(n).drop(columns="order")
-    c["tier_label"] = c["tier"].map(TIER_LABELS)
-    return c.reset_index(drop=True)
+def _rank(df: pd.DataFrame, cov_ratio_worst, dc_ratio_cols: list[str], bars) -> pd.DataFrame:
+    """Shared by both kinds: drop non-finite |Δc| ratios, then worst ratios, tier and closeness, sorted
+    best first (tiers 1-2 by closeness, tier 3 by its smallest ratio, largest first)."""
+    df = df.assign(cov_ratio_worst=cov_ratio_worst)
+    df = df[np.isfinite(df[dc_ratio_cols].to_numpy()).all(axis=1)].copy()
+    df["dc_ratio_worst"] = df[dc_ratio_cols].min(axis=1)
+    df["worst_ratio"] = np.minimum(df["cov_ratio_worst"], df["dc_ratio_worst"])
+    df["tier"] = _tier(df["worst_ratio"].to_numpy(), bars)
+    df["closeness"] = np.abs(np.log(df[dc_ratio_cols].clip(lower=1e-12))).mean(axis=1)
+    df["order"] = np.where(df["tier"] < 3, df["closeness"], -df["worst_ratio"])
+    return df.sort_values(["tier", "order"])
 
 
-def select_big_nonlabel(pool: pd.DataFrame, pair_dc: pd.DataFrame, treat: dict, n: int) -> pd.DataFrame:
+def select_label_to_present(cands: pd.DataFrame, treat: dict, n: int, bars) -> dict[str, pd.DataFrame]:
+    """For EACH check separately, the top `n` label_to_present candidates (see the module
+    docstring): only those that lower the removed label in that check, ranked by that check's
+    coverage and |Δc| tiers, closest first; tier 4 (does not lower the label) only fills a check
+    that has fewer than `n` that do. `cands` columns: token_id, token, cov_<check>, dc_<check>,
+    lower_<check>; `treat[check]` has cov_swapped_in and dc. Returns {check: DataFrame with token_id,
+    token, cov, dc, lowers_by, cov_ratio, dc_ratio, worst_ratio, tier, tier_label, closeness}."""
+    out = {}
+    for check, t in treat.items():
+        ref = t["cov_swapped_in"]
+        c = pd.DataFrame({"token_id": cands["token_id"].to_numpy(), "token": cands["token"].to_numpy(),
+                          "cov": cands[f"cov_{check}"].to_numpy(dtype=float),
+                          "dc": cands[f"dc_{check}"].to_numpy(dtype=float),
+                          "lowers_by": cands[f"lower_{check}"].to_numpy(dtype=float)})
+        c["cov_ratio"] = np.inf if ref == 0 else c["cov"] / ref
+        c["dc_ratio"] = c["dc"] / t["dc"]
+        r = _rank(c, c["cov_ratio"], ["dc_ratio"], bars).drop(columns=["cov_ratio_worst", "dc_ratio_worst"])
+        r["base_tier"] = r["tier"]
+        r["tier"] = np.where(r["lowers_by"] > 0, r["tier"], 4)
+        r = r.sort_values(["tier", "base_tier", "order"]).head(n).drop(columns=["order", "base_tier"])
+        r["tier_label"] = r["tier"].map(TIER_LABELS)
+        out[check] = r.reset_index(drop=True)
+    return out
+
+
+def select_big_nonlabel(pool: pd.DataFrame, pair_dc: pd.DataFrame, treat: dict, n: int, bars) -> pd.DataFrame:
     """Pick `n` pairs that share no token (see the module docstring). `pool`: output of
-    big_nonlabel_pool. `pair_dc`: columns a_id, b_id, dc_<row> (unscaled |Δc| of the pair's swap).
-    A pair's tier is the worse of its two members' tiers."""
-    tiers = dict(zip(pool["token_id"], pool["member_tier"]))
+    big_nonlabel_pool. `pair_dc`: columns a_id, b_id, dc_<check> (the |Δc| of the pair's swap after
+    scaling). A pair's coverage ratio is the worse of its two members'."""
     worst = dict(zip(pool["token_id"], pool["member_worst_cov_ratio"]))
     text = dict(zip(pool["token_id"], pool["token"]))
     p = pair_dc.copy()
-    p["tier"] = [max(tiers[a], tiers[b]) for a, b in zip(p["a_id"], p["b_id"])]
-    p["worst_cov_ratio"] = [min(worst[a], worst[b]) for a, b in zip(p["a_id"], p["b_id"])]
-    for r in ROWS:
-        p[f"dc_ratio_{r}"] = p[f"dc_{r}"] / treat[r]["dc"]
-    p = p[np.isfinite(p[[f"dc_ratio_{r}" for r in ROWS]]).all(axis=1)]
-    p["closeness"] = np.mean([np.abs(np.log(p[f"dc_ratio_{r}"].clip(lower=1e-12))) for r in ROWS], axis=0)
-    p["order"] = np.where(p["tier"] < 3, p["closeness"], -p["worst_cov_ratio"])
-    p = p.sort_values(["tier", "order"])
+    for check, t in treat.items():
+        p[f"dc_ratio_{check}"] = p[f"dc_{check}"] / t["dc"]
+    cov_worst = [min(worst[a], worst[b]) for a, b in zip(p["a_id"], p["b_id"])]
+    p = _rank(p, cov_worst, [f"dc_ratio_{check}" for check in treat], bars)
     chosen, used = [], set()
     for row in p.itertuples(index=False):
         if row.a_id in used or row.b_id in used:
@@ -328,3 +399,15 @@ def select_big_nonlabel(pool: pd.DataFrame, pair_dc: pd.DataFrame, treat: dict, 
     out["b_token"] = [text[b] for b in out["b_id"]]
     out["tier_label"] = out["tier"].map(TIER_LABELS)
     return out.reset_index(drop=True)
+
+
+def never_in_top(treat: dict) -> dict[str, list[str]]:
+    """{treatment token: ["es/report", ...]}: the passage-language/question groups where that token
+    is never in the top-`pool_k` readout at the edited positions within the band (coverage 0) --
+    there the coverage rule sets no bar, and the swap exchanges a token the lens does not read out."""
+    out: dict[str, set] = {}
+    for t in treat.values():
+        for role in ("removed", "swapped_in"):
+            if t[f"cov_{role}"] == 0:
+                out.setdefault(t[role], set()).add(f"{t['matrix_lang']}/{t['question']}")
+    return {w: sorted(g) for w, g in out.items()}

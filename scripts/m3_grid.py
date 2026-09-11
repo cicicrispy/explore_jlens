@@ -21,8 +21,9 @@ files named <stimulus>_<question>.parquet:
     details/   per cell x band layer x position: where the stream ACTUALLY changed + the planned log
     tokens/    the prompt's tokens, classes, and which positions the position set plans to edit
 Each prompt's files are uploaded as soon as they are written. Running the same command again
-RESUMES an unfinished run. An edit that lands outside its planned positions stops the run (hard
-failure). Figures (never uploaded) and summary.md come last, from the saved files only.
+RESUMES an unfinished run (only if the code is unchanged -- see runs.start_or_resume). An edit that
+lands outside its planned positions stops the run (hard failure). Figures and summary.md come last,
+from the saved files only; the summary figures are uploaded with the run, the mask figures never.
 
     python scripts/m3_grid.py --experiment configs/experiments/m3_positives_question.yaml
     python scripts/m3_grid.py --experiment configs/experiments/m3_anomaly_question.yaml
@@ -72,58 +73,82 @@ def _py(v):
     return v
 
 
+def _float32(df: pd.DataFrame) -> pd.DataFrame:
+    """The control tables are stored in 32-bit floats (half the size; 7 significant digits is plenty)."""
+    return df.astype({c: "float32" for c in df.select_dtypes("float64").columns})
+
+
+def _entry(i: int, row: dict, checks: list[str], fields: tuple) -> dict:
+    """One picked control for selection.yaml: its summary fields, then its value of each `fields`
+    entry in every check nested under per_check (so the file stays readable with 16 checks)."""
+    per = {f"{f}_{k}" for f in fields for k in checks}
+    out = {"control_index": i, **{k: v for k, v in row.items() if k not in per}}
+    out["per_check"] = {k: {f: row[f"{f}_{k}"] for f in fields} for k in checks}
+    return out
+
+
 def _select_controls(run, exp, model, lens, stim, fmt, tokens_raw, pair_words, band_layers, m2_dir, store):
     """Pick the controls (controls.py) and save them in controls/. Returns the selection dict."""
     c = exp["controls"]
     classes = prompts_mod.POSITION_SETS[exp["position_set"]]
     tok = model.tokenizer
-    keys = [(s["id"], q) for s in stim["passages"] for q in stim["questions"]]
+    questions = list(stim["questions"])
+    stimuli = {s["id"]: s for s in stim["passages"]}
+    keys = [(s["id"], q) for s in stim["passages"] for q in questions]
     for sid, q in keys:
         pipeline.fetch(m2_dir / "topk" / f"{sid}_{q}.parquet", store)
     topk = pq.read_table(m2_dir / "topk", columns=["stimulus_id", "question_key", "pos", "class", "layer", "topk_ids"],
                          filters=[("layer", "in", band_layers), ("class", "in", list(classes))])
     cov = controls_mod.coverage(topk, classes, band_layers, exp["skip_first"], c["pool_k"])
-    by_lang = {lang: [(s["id"], q) for s in stim["passages"] if s["matrix_lang"] == lang for q in stim["questions"]]
-               for lang in ("es", "fr")}
-    cov_lang = controls_mod.coverage_by_language(cov, by_lang, len(band_layers))
+    groups = [controls_mod.group_name(stimuli[sid]["matrix_lang"], q) for sid, q in keys]
+    by_group = {}
+    for g, key in zip(groups, keys):
+        by_group.setdefault(g, []).append(key)
+    cov_group = controls_mod.coverage_by_group(cov, by_group, len(band_layers))
 
     info = controls_mod.classify_tokens(sorted(cov["token_id"].unique()), tok, tokens_raw["controls"]["control_ineligible"])
     eligible = info[info["excluded_reason"] == ""].reset_index(drop=True)
     pair_ids = [tok.encode(w, add_special_tokens=False)[0] for w in pair_words]
-    cands, treat = controls_mod.with_coverage(eligible, cov_lang, pair_words, pair_ids)
+    cands, treat = controls_mod.with_coverage(eligible, cov_group, pair_words, pair_ids, questions)
     pool = controls_mod.big_nonlabel_pool(cands, treat, c["pair_pool"], c["bars"])
 
-    prompts, masks, langs = [], [], []
-    stimuli = {s["id"]: s for s in stim["passages"]}
+    prompts, masks = [], []
     for sid, q in keys:
         p = prompts_mod.build_prompt(stimuli[sid], q, fmt)
         prompts.append(p)
         masks.append(prompts_mod.mask(p, set(classes), skip_first=exp["skip_first"]))
-        langs.append(stimuli[sid]["matrix_lang"])
-    print(f"      clean pass over {len(prompts)} prompts: |Δc| for {len(cands)} label_to_present candidates and "
-          f"{len(pool) * (len(pool) - 1) // 2} big_nonlabel pairs ...", flush=True)
+    print(f"      clean pass over {len(prompts)} prompts: |Δc| and direction for {len(cands)} label_to_present "
+          f"candidates (picked separately for each of the {len(treat)} row x question checks, lowering the label), "
+          f"lens distances for {len(pool) * (len(pool) - 1) // 2} big_nonlabel pairs (one set, every check) ...",
+          flush=True)
     est = controls_mod.estimate_delta_c(model, lens, prompts, masks, band_layers, cands["token_id"].tolist(),
                                         pair_ids, pool["token_id"].tolist())
-    cands, treat, pair_tab = controls_mod.with_delta_c(cands, treat, est, langs, pair_words, pool["token_id"].tolist())
+    cands, treat, pair_tab = controls_mod.with_delta_c(cands, treat, est, groups, pair_words,
+                                                       pool["token_id"].tolist(), c["norm_scale"])
     ltp = controls_mod.select_label_to_present(cands, treat, c["n_per_kind"], c["bars"])
-    bn = controls_mod.select_big_nonlabel(pool, pair_tab, treat, c["n_per_kind"])
-    if ltp.empty or bn.empty:
-        raise SystemExit(f"no {'label_to_present' if ltp.empty else 'big_nonlabel'} control could be formed at all "
-                         "(no eligible candidate) -- a treatment without its controls breaks invariant 7")
+    bn = controls_mod.select_big_nonlabel(pool, pair_tab, treat, c["n_per_kind"], c["bars"])
+    if any(df.empty for df in ltp.values()) or bn.empty:
+        raise SystemExit("a label_to_present or big_nonlabel control could not be formed at all (no eligible "
+                         "candidate) -- a treatment without its controls breaks invariant 7")
 
     (run.dir / "controls").mkdir(exist_ok=True)
-    io_mod.write_parquet(pd.concat([cands, info[info["excluded_reason"] != ""]], ignore_index=True),
-                         run.dir / "controls" / "candidates.parquet")
-    io_mod.write_parquet(pair_tab, run.dir / "controls" / "pairs.parquet")
     excluded = info[info["excluded_reason"] != ""]
+    io_mod.write_parquet(_float32(pd.concat([cands, excluded], ignore_index=True)),
+                         run.dir / "controls" / "candidates.parquet")
+    io_mod.write_parquet(_float32(pair_tab), run.dir / "controls" / "pairs.parquet")
+    checks = list(treat)
     selection = {
+        "selection_version": controls_mod.SELECTION_VERSION,
         "picked_by_run": run.run_id, "position_set": exp["position_set"], "position_classes": list(classes),
         "band": exp["band"], "band_layers": band_layers, "skip_first": exp["skip_first"],
         "from_m2_run": m2_dir.name, "pair_words": list(pair_words), "pool_k": c["pool_k"],
         "bars": c["bars"], "pair_pool": c["pair_pool"], "norm_scale": c["norm_scale"],
-        "rows": treat,
-        "label_to_present": [{"control_index": i, **r} for i, r in enumerate(ltp.to_dict("records"))],
-        "big_nonlabel": [{"control_index": i, **r} for i, r in enumerate(bn.to_dict("records"))],
+        "checks": treat,
+        # per check: the n tokens that check's label_to_present cells use
+        "label_to_present": {k: [{"control_index": i, **r} for i, r in enumerate(df.to_dict("records"))]
+                             for k, df in ltp.items()},
+        "big_nonlabel": [_entry(i, r, checks, ("dc", "dc_ratio")) for i, r in enumerate(bn.to_dict("records"))],
+        "never_in_top": controls_mod.never_in_top(treat),
         "n_candidates_eligible": int(len(cands)),
         "excluded_counts": excluded["excluded_reason"].value_counts().to_dict(),
         "excluded_special": excluded[excluded["excluded_reason"].isin(
@@ -135,6 +160,39 @@ def _select_controls(run, exp, model, lens, stim, fmt, tokens_raw, pair_words, b
     return yaml.safe_load((run.dir / "controls" / "selection.yaml").read_text())
 
 
+def _run_checks(selection, questions) -> list[str]:
+    """The checks (row x question) whose cells this run makes."""
+    return [k for k, t in selection["checks"].items() if t["question"] in questions]
+
+
+def _control_lines(selection, questions) -> list[str]:
+    """The picked controls for the log and the summary: label_to_present one line per check of this
+    run (its own tokens), big_nonlabel one line per pair (shared by every check)."""
+    n = len(selection["checks"])
+
+    def cov(v) -> str:
+        return "coverage: no bar (the treatment tokens are never in the top-100 here)" if v == float("inf") \
+            else f"coverage {v:.2f}x"
+
+    lines = []
+    for k in _run_checks(selection, questions):
+        picks = "; ".join(f"{c['token']!r} ({c['tier_label']}, |Δc| {c['dc_ratio']:.2f}x, {cov(c['cov_ratio'])})"
+                          for c in selection["label_to_present"][k])
+        lines.append(f"  - label_to_present, {k}: {picks}")
+    lines += [f"  - big_nonlabel[{c['control_index']}]: {c['a_token']!r} <-> {c['b_token']!r}, tier {c['tier_label']} "
+              f"-- lowest over the {n} checks: |Δc| after scaling {c['dc_ratio_worst']:.3f}x the treatment's, "
+              f"{cov(c['cov_ratio_worst'])}" for c in selection["big_nonlabel"]]
+    return lines
+
+
+def _require_current_selection(selection, where: str) -> None:
+    """A controls/selection.yaml written by older code has another layout -- never reuse it."""
+    if selection.get("selection_version") != controls_mod.SELECTION_VERSION:
+        raise SystemExit(f"{where}: its controls/selection.yaml was written by older code (selection_version "
+                         f"{selection.get('selection_version')}, expected {controls_mod.SELECTION_VERSION}), so its "
+                         "controls were picked by other rules -- start a new positives run (--fresh).")
+
+
 def _cells(exp, stim, pair_name, band_layers, selection) -> list:
     classes = set(prompts_mod.POSITION_SETS[exp["position_set"]])
     base = dict(pair_name=pair_name, layers=band_layers, position_set=classes, alpha=exp["alpha"], seed=exp["seed"])
@@ -144,7 +202,8 @@ def _cells(exp, stim, pair_name, band_layers, selection) -> list:
             for d in exp["directions"]:
                 common = dict(stimulus_id=s["id"], question_key=q, direction=d, **base)
                 cells += [runner.Cell(kind=k, **common) for k in ("identity", "swap", "random_direction")]
-                for ctl in selection["label_to_present"]:
+                check = f"{q}_{s['matrix_lang']}_{d}"          # this cell's own label_to_present controls
+                for ctl in selection["label_to_present"][check]:
                     cells.append(runner.Cell(kind="label_to_present", control_index=ctl["control_index"],
                                              control_tokens=[ctl["token_id"]], control_text=[ctl["token"]],
                                              control_tier=ctl["tier"], **common))
@@ -192,9 +251,11 @@ def _direction_checks(run_dir) -> list[str]:
     return lines
 
 
-def _size_checks(run_dir) -> tuple[pd.DataFrame, list[str]]:
+def _size_checks(run_dir, lang_of: dict) -> tuple[pd.DataFrame, list[str]]:
     """Each control's measured edit size vs the treatment's (same prompt and direction): mean over
-    planned positions x layers of |Δc| and of ||Δh||, as ratios control / swap."""
+    planned positions x layers of |Δc| and of ||Δh||, as ratios control / swap. label_to_present is
+    reported per check (each check has its own tokens: its 3 controls pooled), the others per
+    control. `lang_of` = {stimulus_id: passage language}."""
     d = pd.read_parquet(Path(run_dir) / "details", columns=["stimulus_id", "question_key", "direction", "kind",
                                                             "control_index", "planned", "delta_c_norm", "delta_h_norm"])
     d = d[d["planned"]]
@@ -205,11 +266,15 @@ def _size_checks(run_dir) -> tuple[pd.DataFrame, list[str]]:
     idx = list(zip(ctl["stimulus_id"], ctl["question_key"], ctl["direction"]))
     ctl["dc_ratio"] = ctl["delta_c_norm"].to_numpy() / swap.loc[idx, "delta_c_norm"].to_numpy()
     ctl["dh_ratio"] = ctl["delta_h_norm"].to_numpy() / swap.loc[idx, "delta_h_norm"].to_numpy()
+    ltp = ctl["kind"] == "label_to_present"
+    ctl["group"] = np.where(ltp, "label_to_present, " + ctl["question_key"] + "_" + ctl["stimulus_id"].map(lang_of)
+                            + "_" + ctl["direction"] + " (its controls pooled)",
+                            ctl["kind"] + "[" + ctl["control_index"].astype(str) + "]")
     lines = []
-    for (kind, ci), g in ctl.groupby(["kind", "control_index"]):
-        dc = "n/a (no swap coordinates)" if kind == "random_direction" else \
+    for group, g in ctl.groupby("group", sort=True):
+        dc = "n/a (no swap coordinates)" if g["kind"].iloc[0] == "random_direction" else \
             f"mean {g['dc_ratio'].mean():.3f}, min {g['dc_ratio'].min():.3f}, cells below 1: {int((g['dc_ratio'] < 1).sum())}/{len(g)}"
-        lines.append(f"  - {kind}[{ci}]: |Δc| ratio {dc}; ||Δh|| ratio mean {g['dh_ratio'].mean():.3f}, "
+        lines.append(f"  - {group}: |Δc| ratio {dc}; ||Δh|| ratio mean {g['dh_ratio'].mean():.3f}, "
                      f"min {g['dh_ratio'].min():.3f}")
     return ctl, lines
 
@@ -254,6 +319,7 @@ def main() -> None:
     ap.add_argument("--device", default="mps" if torch.backends.mps.is_available() else "cpu",
                     help="dry runs only: mps or cpu (a real run uses the GPU via device_map='auto')")
     args = ap.parse_args()
+    git_commit = env.git_commit()  # the code this process loaded; every row of this launch carries it
 
     exp0 = pipeline.read_experiment(args.experiment)
     dry, store, root = pipeline.is_dryrun(exp0), pipeline.store_for(exp0), pipeline.runs_root(exp0)
@@ -290,6 +356,7 @@ def main() -> None:
         # even if they never reached the store: the file is written atomically, so it is complete.
         if resumed and (sel_path.exists() or store.exists(sel_path)):
             selection = yaml.safe_load(pipeline.fetch(sel_path, store).read_text())
+            _require_current_selection(selection, f"resumed run {run.run_id}")
             print("      reusing the controls this run already picked (controls/selection.yaml)", flush=True)
         else:
             selection = _select_controls(run, exp, model, lens, stim, fmt, tokens_raw, pair_words, band_layers,
@@ -298,34 +365,32 @@ def main() -> None:
     else:
         pos_dir = root / "M3" / pos_run
         selection = yaml.safe_load(pipeline.fetch(pos_dir / "controls" / "selection.yaml", store).read_text())
+        _require_current_selection(selection, f"positives run {pos_run}")
         mismatch = {k: (selection[k], v) for k, v in (("position_set", exp["position_set"]), ("band_layers", band_layers),
                                                         ("from_m2_run", m2_run), ("pair_words", pair_words),
                                                         ("skip_first", exp["skip_first"])) if selection[k] != v}
         if mismatch:
             raise SystemExit(f"positives run {pos_run} used different settings -- (positives, this run): {mismatch}")
         controls_source = f"reused from positives run {pos_run}"
-    ctl_lines =[f"  - label_to_present[{c['control_index']}]: {c['token']!r} (id {c['token_id']}), tier "
-                 f"{c['tier_label']}, worst ratio {c['worst_ratio']:.3f}" for c in selection["label_to_present"]]
-    ctl_lines += [f"  - big_nonlabel[{c['control_index']}]: {c['a_token']!r} <-> {c['b_token']!r}, tier "
-                  f"{c['tier_label']}, worst coverage ratio {c['worst_cov_ratio']:.3f}" for c in selection["big_nonlabel"]]
+    ctl_lines = _control_lines(selection, exp["questions"])
     print("\n".join(ctl_lines), flush=True)
 
     cells = _cells(exp, stim, pair_name, band_layers, selection)
     groups = runner.group_by_prompt(cells)
     done = runs_mod.uploaded_files(run.dir, store)
     todo = [k for k in groups if not all(f"{d}/{k[0]}_{k[1]}.parquet" in done for d in FOLDERS)]
-    git_commit = env.git_commit()
     cfgs = {
         "stimuli": {s["id"]: s for s in stim["passages"]}, "fmt": fmt, "tokens_raw": tokens_raw,
         "tokens_cfg": metrics.build_tokens_cfg(tok, tokens_raw), "skip_first": exp["skip_first"],
         "save_topk": exp["save_topk"], "norm_scale": selection["norm_scale"], "config_hash": run.config_hash(),
         "lens_sha": f"random-lens-seed-{exp['dryrun']['lens_seed']}" if dry else lens_cfg["revision_sha"],
         "model_revision": "standin" if dry else model_cfg["revision"], "run_id": run.run_id,
+        "git_commit": git_commit,
     }
     uploader = io_mod.BackgroundUploader(run.dir, store=store)
     uploader.trigger(files=[f for f in ("refs.yaml", *CONTROL_FILES) if (run.dir / f).exists()])
     print(f"[3/5] Cells: {len(groups) - len(todo)} of {len(groups)} prompts already done (in the {store.name}); "
-          f"{len(todo)} to run, {len(cells) // len(groups)} cells each, layers {band_layers[0]}..{band_layers[-1]} "
+          f"{len(todo)} to run, {len(cells) // len(groups)} cells each, layers {figures.layers_text(band_layers)} "
           f"({exp['band']}), position set '{exp['position_set']}' ...", flush=True)
     target_norms_cache = {}
     for key in tqdm(todo, desc="prompts", unit="prompt"):
@@ -348,11 +413,16 @@ def main() -> None:
                                          "top1_changed", "topk", "n_planned", "n_planned_unchanged", "git_commit"])
     expected_n = len(cells)
     per_group = rec.groupby(["stimulus_id", "question_key", "direction"])["kind"].apply(sorted)
-    want = sorted(["identity", "swap", "random_direction"] + ["label_to_present"] * len(selection["label_to_present"])
-                  + ["big_nonlabel"] * len(selection["big_nonlabel"]))
-    incomplete = [k for k, v in per_group.items() if v != want]
+    lang_of = {s["id"]: s["matrix_lang"] for s in stim["passages"]}
+
+    def want(sid, q, d) -> list[str]:  # the kinds one prompt x direction must have (its check's controls)
+        return sorted(["identity", "swap", "random_direction"] + ["big_nonlabel"] * len(selection["big_nonlabel"])
+                      + ["label_to_present"] * len(selection["label_to_present"][f"{q}_{lang_of[sid]}_{d}"]))
+
+    incomplete = [k for k, v in per_group.items() if v != want(*k)]
+    cells_per_group = len(cells) // max(len(stim["passages"]) * len(exp["questions"]) * len(exp["directions"]), 1)
     direction_lines = _direction_checks(run.dir)
-    _, size_lines = _size_checks(run.dir)
+    _, size_lines = _size_checks(run.dir, lang_of)
     (run.dir / "figure_params.json").write_text(json.dumps({
         "band": exp["band"], "band_layers": band_layers, "position_set": exp["position_set"],
         "pair_name": pair_name, "pair_words": pair_words, "questions": exp["questions"]}, indent=2, ensure_ascii=False))
@@ -382,27 +452,32 @@ def main() -> None:
     (run.dir / "checksums.txt").write_text("\n".join(
         f"{io_mod.sha256_of(p)}  {p.relative_to(run.dir).as_posix()}" for p in data_files) + "\n")
     commits = sorted(rec["git_commit"].unique())
-    tier3 = [c for c in selection["label_to_present"] + selection["big_nonlabel"] if c["tier"] == 3]
+    flagged = [f"{k}: {c['token']!r} ({c['tier_label']})" for k in _run_checks(selection, exp["questions"])
+               for c in selection["label_to_present"][k] if c["tier"] >= 3]
+    flagged += [f"{c['a_token']!r} <-> {c['b_token']!r} ({c['tier_label']})" for c in selection["big_nonlabel"]
+                if c["tier"] >= 3]
+    never = selection.get("never_in_top") or {}
+    summary_figures = [p.relative_to(run.dir).as_posix() for p in written if "masks" not in p.relative_to(run.dir).parts]
     summary_lines = [
         f"# M3 summary -- run {run.run_id} ({'positives' if positives else 'anomaly'}, position set "
         f"'{exp['position_set']}')", "",
         "## 1. Environment",
         f"- Environment: {pipeline.environment(exp)}",
         f"- git commit(s) that produced the rows: {', '.join(commits)}"
-        + (" -- more than one: the run was resumed after a code change" if len(commits) > 1 else ""),
+        + (" -- more than one: the run was resumed with --resume after a code change" if len(commits) > 1 else ""),
         f"- resumed: {resumed}; experiment file: {args.experiment}; config_hash (every file in settings/): {run.config_hash()}",
         f"- model: {model_cfg['standin_hf_id'] + ' (stand-in)' if dry else model_cfg['hf_id'] + ' @ ' + model_cfg['revision']}; "
         f"lens: {cfgs['lens_sha']}",
         f"- {m1_line}",
         f"- M2 run: {m2_run} -- treatment pair {pair_name} {pair_words} (pair_score argmax)",
-        f"- band: {exp['band']} = layers {band_layers[0]}..{band_layers[-1]} ({len(band_layers)} layers: {band_layers})",
+        f"- band: {exp['band']} = layers {figures.layers_text(band_layers)} ({len(band_layers)} layers: {band_layers})",
         f"- position set: '{exp['position_set']}' = classes {list(prompts_mod.POSITION_SETS[exp['position_set']])}; "
         f"skip_first {exp['skip_first']}; alpha {exp['alpha']} (treatment); seed {exp['seed']}; directions {exp['directions']}",
         f"- questions: {exp['questions']}; dataset: {store.name}",
         f"- controls ({controls_source}; no human review -- src/jlens_spec/controls.py):", *ctl_lines, "",
         "## 2. What passed by assertion / checked by eye / not checked",
         f"- Ran {len(rec)} cells (expected {expected_n} = {len(stim['passages'])} passages x {len(exp['questions'])} "
-        f"questions x {len(exp['directions'])} directions x {len(want)} cells).",
+        f"questions x {len(exp['directions'])} directions x {cells_per_group} cells).",
         f"- Invariant 7 (every treatment cell with all its controls, same run): prompt x direction groups missing a "
         f"cell: {incomplete or 'none'}.",
         "- Edits outside the planned positions: none (any would have stopped the run).",
@@ -417,12 +492,18 @@ def main() -> None:
         "positions x layers):", *size_lines,
         "- NOT checked: any scientific reading of these numbers.", "",
         "## 3. Figures",
-        f"- {len(written)} figure files in {run.dir}/figures/png/: panel_c, margin_vs_deltac_<question>, and one "
-        "mask figure per prompt (masks/, 5 kinds x 2 directions, drawn from where the stream actually changed). "
-        f"NOT uploaded; redraw from the data: `python scripts/make_figures.py {run.dir} --format pdf`. Combined "
-        "panel c with the other run of this position set: scripts/combine_panel_c.py.", "",
+        f"- {len(written)} figure files in {run.dir}/figures/png/: panel_c, margin_vs_deltac_<question>, "
+        "flip_heatmap (flip rate per question x kind, flipped/total in each box), margin_change (how far each "
+        "edit moved the answer, per question), and one mask figure per prompt (masks/, 5 kinds x 2 directions, "
+        f"drawn from where the stream actually changed). The {len(summary_figures)} summary figures are uploaded "
+        "with the run; the mask figures are not. Redraw any of them from the data: "
+        f"`python scripts/make_figures.py {run.dir} --format pdf`. Combined figures with the other run of this "
+        "position set: scripts/combine_panel_c.py.", "",
         "## 4. Anomalies / open questions",
-        f"- Controls below the 75% bar (flagged, used anyway): {[c.get('token') or [c['a_token'], c['b_token']] for c in tier3] or 'none'}",
+        f"- Controls below the 75% bar or not lowering the label (flagged, used anyway): {flagged or 'none'}",
+        "- Treatment tokens never in the lens top-100 at the edited positions within the band (there the coverage "
+        "rule sets no bar, and the swap exchanges a token the lens does not read out): "
+        + ("; ".join(f"{w!r} in {', '.join(g)}" for w, g in never.items()) if never else "none"),
         f"- Background uploads: {uploader.n_uploads} ok, {uploader.n_failures} failed"
         + (f"; last error: {bg_error}" if bg_error else ""),
         f"- Files downloaded from the store at the end (computed on another machine): {len(downloaded)}", "",
@@ -434,7 +515,7 @@ def main() -> None:
         "## 7. Checksums",
         f"- {len(data_files)} data files; sha256 of each in checksums.txt (sha256 {io_mod.sha256_of(run.dir / 'checksums.txt')})",
     ]
-    url = io_mod.finalize_run(run.dir, summary_lines, store=store)
+    url = io_mod.finalize_run(run.dir, summary_lines, store=store, figures_to_upload=summary_figures)
     if url is None:
         print(f"M3 computed everything, but the upload FAILED, so this run counts as unfinished "
               f"(see {run.dir}/upload_error.txt). Run the same command again to retry.")

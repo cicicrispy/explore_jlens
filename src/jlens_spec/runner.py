@@ -6,7 +6,9 @@ detail between modules -- documented here rather than guessed silently):
 - `cfgs` bundles runtime context not carried by `Cell` itself: `stimuli` (dict[id -> stimulus]),
   `fmt` (for prompts.build_prompt, see prompts.make_fmt), `tokens_raw` (raw configs/tokens.yaml),
   `tokens_cfg` (metrics.build_tokens_cfg output), `skip_first`, `save_topk`, `norm_scale`,
-  `config_hash`, `lens_sha`, `model_revision`, `run_id`. `run_prompt` also injects `clean_cache`.
+  `config_hash`, `lens_sha`, `model_revision`, `run_id`, and `git_commit` -- the env.git_commit()
+  stamp the script took when it started (without it, each record reads the disk when it is made).
+  `run_prompt` also injects `clean_cache`.
 - Direction mapping: `pairs.<name>` is always ordered (es, fr). For a stimulus with matrix_lang and
   intrusion_lang in {es, fr}, "m2i" swaps FROM the matrix-language pair member TO the
   intrusion-language member at the intervened positions; "i2m" reverses it
@@ -159,7 +161,7 @@ def run_cell(model, lens, cell: Cell, cfgs: dict, target_norms: dict | None = No
         intervention_logs=logs,
         prompt_len=len(prompt.input_ids),
         metric_pos=prompt.metric_pos,
-        git_commit=env_mod.git_commit(),
+        git_commit=cfgs.get("git_commit") or env_mod.git_commit(),
         config_hash=cfgs.get("config_hash", ""),
         lens_sha=cfgs.get("lens_sha", ""),
         model_revision=cfgs.get("model_revision", ""),
