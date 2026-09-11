@@ -32,7 +32,10 @@ def load_model(cfg: dict, standin: bool = False, device: str | None = None):
         hf_id, revision = cfg["hf_id"], cfg["revision"]
         dtype = getattr(torch, cfg.get("dtype", "bfloat16"))
 
-    device_map = {"": device} if device is not None else "auto"
+    # MPS: load on CPU (the path the tests exercise) and move afterwards; loading weights straight
+    # onto MPS via accelerate's device_map was observed to stall at ~1% of weight loading.
+    load_device = "cpu" if device == "mps" else device
+    device_map = {"": load_device} if load_device is not None else "auto"
     model = LanguageModel(
         hf_id,
         revision=revision,

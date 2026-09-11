@@ -1,0 +1,25 @@
+# M0 smoke test (Phase A, Mac, stand-in model -- no GPU, no real model or lens).
+# Hand-written. Copied into the run folder's settings/ when a run starts; the run reads that copy.
+#
+#   python scripts/m0_smoke.py                      # uses this file
+#   python scripts/m0_smoke.py --experiment <file>  # any other M0 experiment file
+
+name: smoke          # run folders are named runs/M0/<name>_<UTC start time>/
+milestone: M0
+
+# Positions a Stage-1 intervention edits -- this is what the 64 mask figures show.
+mask:
+  position_set: [question]
+  skip_first: 4      # the first positions are never edited (high-norm; hygiene invariant)
+
+# One `swap` and one `identity` cell on one prompt, with a random lens, to exercise the full
+# trace + edit + readout path. The numbers are meaningless (random lens); only the plumbing is tested.
+smoke_cells:
+  stimulus: sp_01
+  question: report
+  swap: [" the", " a"]     # source -> target token; any single-token pair works
+  layer_fraction: 0.25     # edit the first quarter of the lens's layers
+  lens_seed: 0
+  alpha: 1.0
+
+save_topk: 100       # how many top tokens to save per cell (figures/summaries show fewer)

@@ -32,8 +32,49 @@ and scripts work from any directory) and sets `HF_HOME` from `configs/paths.yaml
 reuses the cache `setup.sh` filled instead of re-downloading.
 
 **No code ever writes to `configs/`.** Values discovered at runtime (resolved lens sha, observed
-chat template, single-token checks, proposed controls) are written under `runs/<M>/`; you copy
-anything that should become canonical into `configs/` by hand.
+chat template, single-token checks, proposed controls) are written into the run's folder under
+`runs/`; you copy anything that should become canonical into `configs/` by hand.
+
+## Run folders and settings copies
+
+Every run gets its own folder, and nothing is ever overwritten:
+
+```
+runs/<milestone>/<experiment name>_<UTC start time>/     e.g. runs/M0/smoke_20260912-031000/
+    settings/        copies of every settings file the run uses, taken when the run starts
+    manifest.json    fixed facts about the run, written once at the start and never changed:
+                     run_id, milestone, experiment file, settings sources, config_hash, git
+                     commit, start time
+    figures/png/     figures drawn at the end of the run (other formats: see "Figures" below)
+    ...              the run's data files (parquet etc.)
+    summary.md       the milestone summary -- written LAST, see "When is a run finished?"
+```
+
+**When is a run finished? When its `summary.md` is on HF -- nothing else counts.** At the end of
+every milestone script (`io.finalize_run`):
+
+1. the run folder is uploaded to the HF dataset. `summary.md` doesn't exist yet, so it can't go up
+   early. (`hf upload` may split a larger folder into several commits; that's fine.)
+2. only after that upload has fully succeeded, `summary.md` is written -- including the run's HF
+   folder link and the upload's URL -- and uploaded on its own, as the last step.
+
+If step 1 fails, no summary is written and the error is saved to `upload_error.txt`. If step 2
+fails, the summary is renamed `summary_not_uploaded.md` and the error is saved to
+`upload_error.txt`. Either way, no `summary.md` means the run is not finished -- on HF and on your
+machine. A run stopped mid-upload (e.g. Ctrl-C) also has no `summary.md`.
+
+**Experiment files.** What a run does is described by a hand-written experiment file in
+`configs/experiments/` (e.g. `configs/experiments/m0_smoke.yaml`), passed with `--experiment`.
+
+**Settings copy.** When a run starts, the experiment file and every other settings file the run
+reads (e.g. `configs/model.yaml`, `configs/tokens.yaml`, `stimuli/stimuli.json`) are copied into
+that run's `settings/` folder. The run then reads its settings **only from that copy**, never from
+`configs/`. Editing `configs/` while a run is going, or before resuming it, never changes that run;
+the edit applies to the next new run. Code is not copied: every saved row records the git commit
+that produced it. `config_hash` in the manifest and in the rows is a hash of the `settings/` folder.
+
+Every saved row also carries the run's `run_id`. **Currently only M0 uses run folders**; M1-M3
+still write to `runs/<M>/` until they are converted (next stages of work).
 
 **Commit before running a milestone.** Records store the git commit; if code or configs differ
 from it, the hash is suffixed `-dirty`.
@@ -45,11 +86,21 @@ pytest tests/ -q
 python scripts/m0_smoke.py
 ```
 
-Builds all 64 stimulus x question prompts on the stand-in model (`configs/model.yaml`'s
-`standin_hf_id`, `Qwen/Qwen3-0.6B`), renders mask PNGs to
-`runs/M0/figures/masks/`, runs one `swap` and one `identity` cell with a random lens, and writes
-`runs/M0/summary.md`, `runs/M0/template_string.txt` and `runs/M0/single_token_check.yaml`. Uploads `runs/M0/` to the `orbitsoferis/jlens-specificity` HF dataset at the
-end (needs `HF_TOKEN`).
+Settings come from `configs/experiments/m0_smoke.yaml` (or `--experiment <file>`). Creates a new
+run folder `runs/M0/smoke_<UTC start time>/` and, inside it:
+
+- builds all 64 stimulus x question prompts on the stand-in model (`configs/model.yaml`'s
+  `standin_hf_id`, `Qwen/Qwen3-0.6B`) and saves every prompt's per-token mask data (token text,
+  class, edited or not, metric position) to `masks.parquet`;
+- draws the 64 mask figures **from `masks.parquet`** into `figures/png/masks/`. A token with no text
+  is labelled `#<token id>` (explained in each figure's legend);
+- runs one `swap` and one `identity` cell with a random lens and saves them, with each cell's
+  top-100 next tokens, to `m0_smoke.parquet`;
+- writes `template_string.txt` and `single_token_check.yaml` (and `manifest.json` at the start).
+
+At the end the run folder is uploaded to the `orbitsoferis/jlens-specificity` HF dataset (needs
+`HF_TOKEN`) -- **without `figures/`**, since every M0 figure can be redrawn from `masks.parquet` --
+and then `summary.md` is written and uploaded last (see "When is a run finished?" above).
 
 ## M1 (Phase B, GPU box -- only after M0 sign-off)
 
@@ -68,7 +119,7 @@ placeholder until replaced with the paper's exact prompt.
 Runs lens validation: final-layer agreement, readout reproduction on `sp_01`, the Chinese-antonym
 causal positive control (stops before M2 if it fails at both alpha=1 and alpha=2), and band
 signatures (CKA + next-token agreement + kurtosis by layer) into
-`runs/M1/band_signatures.{parquet,png}`. **You** then fill `configs/bands.yaml`'s `workspace` (and
+`runs/M1/band_signatures.parquet` and `runs/M1/figures/band_signatures.png`. **You** then fill `configs/bands.yaml`'s `workspace` (and
 `full`/`early_late`, used later) by reading that figure -- no code does this automatically.
 
 ## M2 (Phase B -- only after `configs/bands.yaml.workspace` is filled)
@@ -94,6 +145,27 @@ Refuses to run if `bands.workspace`, `lens.revision_sha`, `controls.label_to_pre
 `controls.big_nonlabel.pair` is null. Runs the full grid (16 stimuli x 4 questions x 2 directions x
 1 pair x 5 kinds), writes `runs/M3/records.parquet`, `panel_c.png`, `margin_vs_deltac_*.png`, and
 ten sampled raw cells per group into `summary.md`.
+
+## Figures (regenerable without the model)
+
+Compute and plotting are separate. Every milestone script saves the data behind each figure to its
+run folder (parquet, plus a small `figure_params.json` for the few non-tabular values such as the
+band used), and then builds its figures **from those files** via `figures.make_figures` -- never from
+in-memory results. The same function is available standalone, so any figure can be redrawn later,
+in any format, on any machine that has the run folder (e.g. pulled from the HF dataset), with no
+model or GPU:
+
+```bash
+python scripts/make_figures.py runs/M0/smoke_20260912-031000 --format pdf
+python scripts/make_figures.py runs/M0/smoke_20260912-031000 --format pdf --out writeup/figs
+```
+
+By default figures go to `<run folder>/figures/<format>/` (one folder per format: the run's own PNGs
+in `figures/png/`, a PDF redraw in `figures/pdf/`). `--out <folder>` writes straight into that
+folder instead. Formats are png/pdf/svg. Which files each milestone's figures read is listed at the
+top of `src/jlens_spec/figures.py`. Plotting functions there take DataFrames as read back from
+parquet and return a matplotlib Figure, so you can also call them directly in a notebook to restyle
+one figure.
 
 ## Layer bands: contiguous ranges vs. multiple blocks
 
@@ -133,9 +205,9 @@ flight doesn't start a second (concurrent uploads to the same repo path would ra
 the uploader "dirty" so exactly one more upload runs immediately after the current one finishes,
 picking up everything written since. `runner.run_grid` takes an optional `uploader=` argument and
 calls `.trigger()` itself after every record; `scripts/m2_loading.py` and `scripts/m3_grid.py` both
-wire this up already, then `flush()` + `shutdown()` before doing one final, synchronous `upload_run`
-call at the very end so the run's figures and `summary.md` (written after the loop) are included
-too. Upload failures (e.g. `HF_TOKEN` unset, rate limits) never raise into the GPU loop, but each
+wire this up already, then `flush()` + `shutdown()` before `io.finalize_run`, which uploads the run
+folder one final time (picking up the figures) and then writes and uploads `summary.md` last (see
+"When is a run finished?"). Upload failures (e.g. `HF_TOKEN` unset, rate limits) never raise into the GPU loop, but each
 one is printed to stderr as it happens, counted (`n_failures`), and reported in the milestone's
 `summary.md`. `BackgroundUploader(run_dir, min_interval_s=...)` optionally spaces uploads apart
 (default 0, no delay; any wait is on the upload thread, never the GPU loop). Parquet appends are
@@ -177,6 +249,19 @@ effect" -- and `panel_c` leaves those out of the flip rates.
 
 ## Known open items (flagged during writing, need your input)
 
+- **Token boundaries -- decide at M1 with the real tokenizer (Qwen3.6-27B).**
+  `tests/test_prompts.py::test_region_tokens_spell_their_text_exactly` is **expected to fail until
+  then** (so `pytest tests/` shows 1 failure); any other failure is new. With the stand-in
+  tokenizer (Qwen3-0.6B) it finds two things, in all 64 prompts and nothing else:
+  - the question's last token is `.\n\n` (period + the blank line before the passage). Decided:
+    it stays "question" and is edited (see "Notes for the write-up").
+  - sentences 2-5 each start with a token that includes the space before the word (e.g. `" Un"`).
+    Decided: accepted as part of that token.
+
+  At M1: run the same check on the real tokenizer. If it also attaches the space to the next word,
+  update the sentence spans in `stimuli/stimuli.json` so sentences 2-5 start at that space --
+  exactly one space, never two, and no change to the text itself -- and then make the test expect
+  exactly those characters.
 - **Antonym prompt** (`ANTONYM_USER_TEXT` in `scripts/m1_validate.py`) is a placeholder; replace it
   with the paper's exact prompt if available.
 - **Lens file layout** is parsed heuristically (`lens.load_lens`); `runs/M1/lens_resolved.yaml`
@@ -197,6 +282,16 @@ effect" -- and `panel_c` leaves those out of the flip rates.
   expected, not a sign anything is fundamentally wrong.
 - `test_interventions.py`'s check 7 ("apply reproduces the mini-paper's `run` to 1e-4") is skipped
   -- no reference implementation is available in this repo to compare against.
+
+## Notes for the write-up
+
+- **The question's last token also carries the paragraph break -- and it is edited (decided
+  2026-09-10).** Qwen's tokenizer merges the question's final period with the blank line that
+  separates the question from the passage into one token, `.\n\n`. That token is labelled
+  "question", so every question-position intervention (all of M3) edits it as well: the edit also
+  touches the token that encodes the paragraph break between question and passage. Found in all 64
+  prompts by `tests/test_prompts.py::test_region_tokens_spell_their_text_exactly` with the stand-in
+  tokenizer (Qwen3-0.6B); to be re-checked with the real tokenizer (Qwen3.6-27B) at M1.
 
 ## Secrets
 

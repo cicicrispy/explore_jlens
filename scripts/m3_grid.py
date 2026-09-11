@@ -115,10 +115,8 @@ def main() -> None:
     bg_upload_note = (f"- Background uploads: {uploader.n_uploads} ok, {uploader.n_failures} failed"
                       + (f"; last error: {bg_error}" if bg_error else ""))
 
-    (RUN_DIR / "figures").mkdir(parents=True, exist_ok=True)
-    figures.panel_c(all_records, RUN_DIR / "figures" / "panel_c.png")
-    figures.margin_vs_deltac(all_records, "anomaly", RUN_DIR / "figures" / "margin_vs_deltac_anomaly.png")
-    figures.margin_vs_deltac(all_records, "report", RUN_DIR / "figures" / "margin_vs_deltac_report.png")
+    # Built from records.parquet as read back from disk -- same call as scripts/make_figures.py.
+    figures.make_figures(RUN_DIR, milestone="M3")
 
     rng = random.Random(SEED)
     grouped = {}
@@ -150,6 +148,8 @@ def main() -> None:
         "- runs/M3/figures/panel_c.png",
         "- runs/M3/figures/margin_vs_deltac_anomaly.png",
         "- runs/M3/figures/margin_vs_deltac_report.png",
+        "- Built from runs/M3/records.parquet. Regenerate without the model: "
+        "`python scripts/make_figures.py --milestone M3 --format pdf`.",
         "",
         "## 4. Anomalies / open questions",
         "- This script has not been executed; the cell count above is the design target, not a "
@@ -164,17 +164,9 @@ def main() -> None:
         f"- runs/M3/records.parquet sha256: {io_mod.sha256_of(records_path)}",
     ]
 
-    upload_url = None
-    try:
-        upload_url = io_mod.upload_run(RUN_DIR)
-        summary_lines.append(f"- HF dataset upload: {upload_url}")
-    except Exception as e:  # noqa: BLE001
-        summary_lines.append(f"- HF dataset upload FAILED: {e!r}")
-
-    with open(RUN_DIR / "summary.md", "w") as f:
-        f.write("\n".join(summary_lines))
-
-    io_mod.write_manifest(RUN_DIR, milestone="M3", environment="cuda", upload_url=upload_url, n_cells=len(all_records))
+    # Interim until M3 moves to run folders (stage 3): manifest written here, then the upload.
+    io_mod.write_manifest(RUN_DIR, milestone="M3", environment="cuda", n_cells=len(all_records))
+    io_mod.finalize_run(RUN_DIR, summary_lines)
     print("M3 grid complete. See runs/M3/summary.md")
 
 

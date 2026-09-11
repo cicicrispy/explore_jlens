@@ -181,6 +181,30 @@ def test_apply_edits_actually_propagate(standin_model, random_lens):
     assert not torch.allclose(logits.cpu(), clean.cpu(), atol=1e-2)
 
 
+def test_prompts_are_independent_forward_passes(standin_model):
+    """Every prompt is its own single forward pass -- no chat history, no KV cache carried between
+    traces. Running prompt B right after prompt A must give exactly what B gives on its own."""
+    import json
+
+    from jlens_spec import prompts as prompts_mod
+
+    with open("stimuli/stimuli.json") as f:
+        stim = json.load(f)
+    fmt = {"tokenizer": standin_model.tokenizer, "questions": stim["questions"]}
+    a = prompts_mod.build_prompt(stim["passages"][0], "report", fmt)
+    b = prompts_mod.build_prompt(stim["passages"][1], "anomaly", fmt)
+
+    def last_logits(p):
+        with standin_model.trace(p.input_ids):
+            out = standin_model.output.logits[0, p.metric_pos].float().save()
+        return out.cpu()
+
+    b_alone = last_logits(b)
+    last_logits(a)
+    b_after_a = last_logits(b)
+    assert torch.equal(b_alone, b_after_a)
+
+
 @pytest.mark.skip(
     reason="requires the mini-paper's reference `run` implementation to compare against; "
     "not available in this repo -- add this test once the human supplies that reference."

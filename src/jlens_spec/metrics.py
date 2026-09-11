@@ -90,3 +90,14 @@ def argmax_label(question_key: str, logprobs: torch.Tensor, tokens_cfg: dict, ma
     pos_best = max(float(logprobs[i]) for i in pos_ids)
     neg_best = max(float(logprobs[i]) for i in neg_ids)
     return pos_label if pos_best >= neg_best else neg_label
+
+
+def topk_tokens(logits: torch.Tensor, tokenizer, k: int) -> list[dict]:
+    """The k highest-scoring tokens of a 1-D logit vector, best first, as plain dicts
+    {"token_id", "token", "logit", "logprob"} (storable in parquet). How many to SAVE is the run's
+    `save_topk` setting; figures and summaries cut this list down to whatever k they show."""
+    logits = logits.float()
+    logprobs = torch.log_softmax(logits, dim=-1)
+    vals, ids = torch.topk(logits, min(k, logits.shape[-1]))
+    return [{"token_id": int(i), "token": tokenizer.decode([int(i)]), "logit": float(v),
+             "logprob": float(logprobs[i])} for v, i in zip(vals, ids)]

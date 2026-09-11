@@ -5,6 +5,7 @@ import dataclasses
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -61,25 +62,84 @@ def write_manifest(run_dir, **fields) -> None:
         json.dump(manifest, f, indent=2, default=str)
 
 
-def upload_run(run_dir) -> str:
-    """hf upload orbitsoferis/jlens-specificity runs/<M> runs/<M> --repo-type dataset
+HF_DATASET = "orbitsoferis/jlens-specificity"
 
-    `run_dir` must be repo-relative (e.g. "runs/M3"); it's used as-is for the path inside the
+
+def dataset_url(path) -> str:
+    """Browser link to a repo-relative run path (e.g. a run folder) inside the HF dataset."""
+    return f"https://huggingface.co/datasets/{HF_DATASET}/tree/main/{Path(path).as_posix()}"
+
+
+def upload_run(path, exclude_figures: bool = False) -> str:
+    """hf upload orbitsoferis/jlens-specificity <path> <path> --repo-type dataset
+    [--exclude "figures/*"]
+
+    `path` is a run folder or a single file in one, repo-relative (e.g.
+    "runs/M3/stage1_20260912-031000" or ".../summary.md"); it's used as-is for the path inside the
     dataset, so an absolute path would land at a machine-specific location. Run from the repo root
-    (env.bootstrap() does this). Raises RuntimeError carrying hf's stderr on failure.
+    (env.bootstrap() does this). `exclude_figures` leaves the run's figures/ folder out (M0: its mask
+    figures are redrawn from masks.parquet whenever needed). Nothing already in the dataset is
+    deleted. hf may split a large folder into several commits. Raises RuntimeError carrying hf's
+    stderr on failure. Returns the URL hf prints (its colored "✓ Uploaded / url: ..." output reduced
+    to the bare URL), or the de-colored output if no URL is found.
     """
-    rel = Path(run_dir)
+    rel = Path(path)
     if rel.is_absolute():
-        raise ValueError(f"upload_run needs a repo-relative path like 'runs/M3', got {run_dir!r}")
+        raise ValueError(f"upload_run needs a repo-relative path like 'runs/M3/<run_id>', got {path!r}")
     rel = rel.as_posix()
-    result = subprocess.run(
-        ["hf", "upload", "orbitsoferis/jlens-specificity", rel, rel, "--repo-type", "dataset"],
-        capture_output=True,
-        text=True,
-    )
+    cmd = ["hf", "upload", HF_DATASET, rel, rel, "--repo-type", "dataset"]
+    if exclude_figures:
+        cmd += ["--exclude", "figures/*"]
+    result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         raise RuntimeError(f"hf upload {rel} failed (exit {result.returncode}): {result.stderr.strip()[-2000:]}")
-    return result.stdout.strip()
+    out = re.sub(r"\x1b\[[0-9;]*m", "", result.stdout).strip()  # hf colors its output even when piped
+    url = re.search(r"https://\S+", out)
+    return url.group(0) if url else out
+
+
+def finalize_run(run_dir, summary_lines: list[str], exclude_figures: bool = False) -> str | None:
+    """End of every milestone script. **A run is finished if and only if its summary.md is on HF.**
+
+    1. Upload the run folder. summary.md does not exist yet, so it cannot go up early (hf may split
+       the folder into several commits -- that's fine).
+    2. Only after (1) has fully succeeded: write summary.md -- `summary_lines` plus the run's HF
+       folder link and (1)'s URL -- and upload it on its own, as the last step.
+
+    Failures are recorded, never raised, and never leave a summary.md that isn't on HF:
+    - (1) fails: no summary is written; the error goes to upload_error.txt.
+    - (2) fails: summary.md is renamed summary_not_uploaded.md; the error goes to upload_error.txt.
+    Leftovers from an earlier attempt (summary.md, summary_not_uploaded.md, upload_error.txt) are
+    deleted first, so they are never uploaded in step 1. Returns (1)'s URL, or None on failure."""
+    run_dir = Path(run_dir)
+    summary = run_dir / "summary.md"
+    not_uploaded = run_dir / "summary_not_uploaded.md"
+    error_file = run_dir / "upload_error.txt"
+    for leftover in (summary, not_uploaded, error_file):
+        leftover.unlink(missing_ok=True)
+
+    def fail(what: str, e: Exception) -> None:
+        error_file.write_text(f"{what} failed: {e!r}\n(HF_TOKEN must be set; see .env)\n")
+        print(f"[upload] {what} FAILED -- this run counts as unfinished (no summary.md on HF). "
+              f"Error saved to {error_file}: {e!r}", file=sys.stderr, flush=True)
+
+    try:
+        url = upload_run(run_dir, exclude_figures=exclude_figures)
+    except Exception as e:  # noqa: BLE001 -- recorded in upload_error.txt, not hidden
+        fail("uploading the run folder", e)
+        return None
+
+    summary.write_text("\n".join(summary_lines) + "\n"
+                       f"- HF dataset folder: {dataset_url(run_dir)}\n"
+                       f"- HF upload of the run folder: {url}\n")
+    try:
+        upload_run(summary)
+    except Exception as e:  # noqa: BLE001
+        summary.rename(not_uploaded)
+        fail("uploading summary.md", e)
+        return None
+    print(f"[upload] done -- {dataset_url(run_dir)}", flush=True)
+    return url
 
 
 class BackgroundUploader:

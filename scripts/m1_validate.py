@@ -77,24 +77,18 @@ def check2_readout_reproduction(model, lens, stimulus, fmt, lang_ids: set, n_lay
             saved[l] = model_mod.layer_output(model, l).float()[0, matrix_positions].save()
 
     tok = model.tokenizer
-    grid = np.empty((len(matrix_positions), len(sampled_layers)), dtype=object)
+    rows = []
     es_top3_frac = {}
-    for j, l in enumerate(sampled_layers):
+    for l in sampled_layers:
         ids, _ = lens_mod.readout(model, lens, saved[l], l, k=5)
-        for i in range(len(matrix_positions)):
-            grid[i, j] = tok.decode([int(ids[i, 0])])
+        for i, pos in enumerate(matrix_positions):
+            top5 = [int(t) for t in ids[i].tolist()]
+            rows.append({"stimulus_id": p.stimulus_id, "question_key": p.question_key, "pos": pos,
+                         "layer": l, "top1_id": top5[0], "top1_text": tok.decode([top5[0]]),
+                         "top5_ids": top5, "top5_text": [tok.decode([t]) for t in top5]})
         es_top3_frac[l] = float(np.mean([bool(set(ids[i, :3].tolist()) & lang_ids) for i in range(len(matrix_positions))]))
-
-    import matplotlib.pyplot as plt
-
-    fig, ax = plt.subplots(figsize=(1.3 * len(sampled_layers) + 2, 0.28 * len(matrix_positions) + 1))
-    ax.axis("off")
-    table = ax.table(cellText=grid, rowLabels=matrix_positions, colLabels=sampled_layers, loc="center")
-    table.set_fontsize(6)
-    ax.set_title("sp_01/report: lens top-1 at matrix positions (rows=pos, cols=layer)")
-    (RUN_DIR / "figures").mkdir(parents=True, exist_ok=True)
-    fig.savefig(RUN_DIR / "figures" / "readout_top1_sp01.png", dpi=130, bbox_inches="tight")
-    plt.close(fig)
+    # Everything figures.readout_grid draws; the figure is built from this file by make_figures.
+    pd.DataFrame(rows).to_parquet(RUN_DIR / "readout_top1_sp01.parquet")
     return sampled_layers, es_top3_frac
 
 
@@ -162,8 +156,9 @@ def check3_causal_positive_control(model, lens):
 
 def check4_band_signatures(model, lens, prompts):
     C, layers = cka_mod.cka_matrix(model, lens, n_tokens=5000, seed=0)
-    (RUN_DIR / "figures").mkdir(parents=True, exist_ok=True)
-    figures.cka_heatmap(C, layers, RUN_DIR / "figures" / "cka_heatmap.png")
+    pd.DataFrame([{"layer_a": a, "layer_b": b, "cka": float(C[i, j])}
+                  for i, a in enumerate(layers) for j, b in enumerate(layers)]
+                 ).to_parquet(RUN_DIR / "cka.parquet")
     # cka_onset_score[l] = mean CKA between layer l and every later covered layer (how much l
     # already shares the geometry of the block above it). A heuristic summary; the heatmap is primary.
     Cn = C.numpy()
@@ -202,19 +197,8 @@ def check4_band_signatures(model, lens, prompts):
     above = df[df["agreement_top1"] > threshold]["layer"]
     motor_onset = int(above.iloc[0]) if len(above) else None
 
-    import matplotlib.pyplot as plt
-
-    fig, axes = plt.subplots(4, 1, figsize=(11, 10), sharex=True)
-    for ax, col in zip(axes, ["cka_onset_score", "agreement_top1", "agreement_top5", "kurtosis"]):
-        ax.plot(df["layer"], df[col], marker=".")
-        ax.set_ylabel(col, fontsize=8)
-        if motor_onset is not None:
-            ax.axvline(motor_onset, color="red", linestyle="--", linewidth=0.8)
-    axes[-1].set_xlabel("layer")
-    axes[0].set_title(f"band signatures (red = candidate motor onset {motor_onset}; human fills configs/bands.yaml)")
-    fig.savefig(RUN_DIR / "band_signatures.png", dpi=120, bbox_inches="tight")
-    plt.close(fig)
     df.to_parquet(RUN_DIR / "band_signatures.parquet")
+    (RUN_DIR / "figure_params.json").write_text(json.dumps({"motor_onset": motor_onset}, indent=2))
     return df, motor_onset
 
 
@@ -248,6 +232,7 @@ def main() -> None:
         json.dump({"info": ctrl_info, "results": {str(k): v for k, v in ctrl_results.items()},
                    "passed": ctrl_passed}, f, indent=2, ensure_ascii=False)
     if not ctrl_passed:
+        figures.make_figures(RUN_DIR, milestone="M1")  # the readout grid from check 2 still gets drawn
         (RUN_DIR / "summary.md").write_text(
             "# M1 summary -- STOPPED\n\nCausal positive control failed at alpha=1 and alpha=2. "
             "Do not run M2. Details: runs/M1/positive_control.json\n"
@@ -256,6 +241,8 @@ def main() -> None:
         sys.exit(1)
 
     band_df, motor_onset = check4_band_signatures(model, lens, all_prompts)
+    # Built from the parquet/JSON just written -- same call as scripts/make_figures.py.
+    figures.make_figures(RUN_DIR, milestone="M1")
 
     table, dropped_pairs, kept_pairs = _single_token_table(tok, tokens_raw)
     with open(RUN_DIR / "single_token_check.yaml", "w") as f:
@@ -284,7 +271,7 @@ def main() -> None:
         f"- Check 1 (final-layer lens readout vs actual model logits, top-10 overlap, {len(overlaps)} positions): "
         f"min={min(overlaps)}, median={int(np.median(overlaps))}, max={max(overlaps)}; max |logit diff|={max_abs:.4g}.",
         f"- Check 2 (sp_01 matrix positions): fraction with an es variant in top-3, by layer: {es_top3_frac}. "
-        "Figure: runs/M1/figures/readout_top1_sp01.png",
+        "Figure: runs/M1/figures/readout_top1_sp01.png (data: runs/M1/readout_top1_sp01.parquet)",
         f"- Check 3 (causal positive control): passed={ctrl_passed}; clean top-1 is 大: {ctrl_info['clean_top1_is_da']}; "
         f"clean top5 {ctrl_info['clean_top5']}; alpha=1 {ctrl_results[1.0]['top5']}; alpha=2 {ctrl_results[2.0]['top5']}. "
         "Prompt is a placeholder unless replaced with the paper's (see ANTONYM_USER_TEXT).",
@@ -292,21 +279,18 @@ def main() -> None:
         f"- Check 5 (single-token, real tokenizer): pairs not single-token: {dropped_pairs or 'none'} "
         "(configs/tokens.yaml not modified; M2 filters at runtime).", "",
         "## 3. Figures",
-        "- runs/M1/figures/cka_heatmap.png (+ .npy), runs/M1/band_signatures.png, runs/M1/figures/readout_top1_sp01.png", "",
+        "- runs/M1/figures/{cka_heatmap,band_signatures,readout_top1_sp01}.png, built from "
+        "runs/M1/{cka,band_signatures,readout_top1_sp01}.parquet + figure_params.json. Regenerate "
+        "without the model: `python scripts/make_figures.py --milestone M1 --format pdf`.", "",
         "## 4. Anomalies / open questions",
         f"- Template (M1 is canonical): {template_note}", "",
         "## 5. Artifact URL, parquet sha256s",
         f"- runs/M1/band_signatures.parquet sha256: {io_mod.sha256_of(RUN_DIR / 'band_signatures.parquet')}", "",
         "## Lens CREDIT.md", credit,
     ]
-    upload_url = None
-    try:
-        upload_url = io_mod.upload_run(RUN_DIR)
-        summary_lines.append(f"\n- HF dataset upload: {upload_url}")
-    except Exception as e:  # noqa: BLE001
-        summary_lines.append(f"\n- HF dataset upload FAILED: {e}")
-    (RUN_DIR / "summary.md").write_text("\n".join(summary_lines))
-    io_mod.write_manifest(RUN_DIR, milestone="M1", environment="cuda", upload_url=upload_url)
+    # Interim until M1 moves to run folders (stage 2): manifest written here, then the upload.
+    io_mod.write_manifest(RUN_DIR, milestone="M1", environment="cuda")
+    io_mod.finalize_run(RUN_DIR, summary_lines + [""])
     print("M1 validation complete. See runs/M1/summary.md")
 
 

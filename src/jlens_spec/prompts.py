@@ -31,6 +31,7 @@ class Prompt:
     question_key: str
     spans: dict
     flags: list[str] = field(default_factory=list)
+    offsets: list[tuple[int, int]] = field(default_factory=list)  # char span of each token in `text`
 
 
 def _overlap(a0: int, a1: int, b0: int, b1: int) -> int:
@@ -124,6 +125,7 @@ def build_prompt(stimulus: dict, question_key: str, fmt: dict) -> Prompt:
         question_key=question_key,
         spans=spans,
         flags=flags,
+        offsets=[(int(s), int(e)) for s, e in offsets],
     )
 
 
@@ -136,45 +138,32 @@ def mask(prompt: Prompt, classes: set[PositionClass], skip_first: int = 4) -> to
     return m
 
 
-_CLASS_COLORS = {
-    "template": "#cccccc",
-    "question": "#7fb3ff",
-    "matrix": "#7fdc7f",
-    "intrusion": "#ffb37f",
-}
+def mask_rows(prompt: Prompt, mask: torch.Tensor) -> list[dict]:
+    """One row per token -- everything figures.mask_figure draws, as plain data for masks.parquet.
+    `token_text` is the token's raw text sliced from `prompt.text` by its offsets ("" if the
+    tokenizer gave it an empty span)."""
+    rows = []
+    for i, tid in enumerate(prompt.input_ids):
+        s, e = prompt.offsets[i] if prompt.offsets else (0, 0)
+        rows.append({
+            "stimulus_id": prompt.stimulus_id,
+            "question_key": prompt.question_key,
+            "pos": i,
+            "token_id": int(tid),
+            "token_text": prompt.text[s:e],
+            "class": prompt.classes[i],
+            "edited": bool(mask[i]),
+            "is_metric_pos": i == prompt.metric_pos,
+        })
+    return rows
 
 
 def render_mask(prompt: Prompt, mask: torch.Tensor, path: Path) -> None:
-    """PNG: one box per token, colored by class, outlined where mask is True, metric_pos marked."""
-    import matplotlib.pyplot as plt
-    from matplotlib.patches import Rectangle
+    """Convenience wrapper: draw one prompt's mask via figures.mask_figure (the only drawing code)
+    and save it to `path` (format from its suffix). Milestone scripts save mask_rows to parquet and
+    call figures.make_figures instead, so the figure can be rebuilt later without the model."""
+    import pandas as pd
 
-    n = len(prompt.input_ids)
-    cols = 16
-    rows = (n + cols - 1) // cols
-    fig, ax = plt.subplots(figsize=(cols * 1.1, rows * 0.9))
+    from . import figures
 
-    for i in range(n):
-        row = i // cols
-        col = i % cols
-        x, y = col, rows - 1 - row
-        color = _CLASS_COLORS.get(prompt.classes[i], "#ffffff")
-        edge = "black"
-        lw = 1.0
-        if bool(mask[i]):
-            edge = "red"
-            lw = 2.5
-        ax.add_patch(Rectangle((x, y), 1, 1, facecolor=color, edgecolor=edge, linewidth=lw))
-        if i == prompt.metric_pos:
-            ax.plot(x + 0.5, y + 0.5, marker="*", color="black", markersize=14)
-
-    ax.set_xlim(0, cols)
-    ax.set_ylim(0, rows)
-    ax.set_aspect("equal")
-    ax.axis("off")
-    ax.set_title(f"{prompt.stimulus_id} / {prompt.question_key}")
-
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(path, dpi=100, bbox_inches="tight")
-    plt.close(fig)
+    figures.write(figures.mask_figure(pd.DataFrame(mask_rows(prompt, mask))), path)

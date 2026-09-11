@@ -2,6 +2,7 @@ import hashlib
 import json
 import threading
 import time
+from pathlib import Path
 from dataclasses import dataclass
 
 import numpy as np
@@ -112,3 +113,96 @@ def test_append_records_leaves_no_temp_file_in_run_dir(tmp_path):
     io_mod.append_records([{"a": 2}], path)
     assert sorted(p.name for p in path.parent.iterdir()) == ["out.parquet"]
     assert list(pd.read_parquet(path)["a"]) == [1, 2]
+
+
+class _Done:
+    returncode = 0
+    stdout = "\x1b[32m✓ Uploaded\x1b[0m\n  url: https://huggingface.co/datasets/x/y/commit/abc123\n"
+    stderr = ""
+
+
+def test_upload_run_returns_bare_url_and_excludes_figures_only_when_asked(monkeypatch):
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        return _Done()
+
+    monkeypatch.setattr(io_mod.subprocess, "run", fake_run)
+    assert io_mod.upload_run("runs/M0/smoke_1") == "https://huggingface.co/datasets/x/y/commit/abc123"
+    assert "--exclude" not in calls[-1] and "--delete" not in calls[-1]
+    io_mod.upload_run("runs/M0/smoke_1", exclude_figures=True)
+    assert calls[-1][-2:] == ["--exclude", "figures/*"] and "--delete" not in calls[-1]
+
+
+def _fake_uploads(tmp_path, fail_on=None):
+    """Replacement for upload_run that records each call and which files existed at that moment.
+    fail_on: "folder" or "summary" makes that upload raise."""
+    calls = []
+
+    def fake(path, exclude_figures=False):
+        kind = "summary" if Path(path).name == "summary.md" else "folder"
+        calls.append({"kind": kind, "exclude_figures": exclude_figures,
+                      "files": sorted(p.name for p in tmp_path.iterdir())})
+        if kind == fail_on:
+            raise RuntimeError(f"{kind} upload broke")
+        return f"https://example/{kind}-commit"
+
+    return fake, calls
+
+
+def test_finalize_run_uploads_folder_first_and_summary_last(tmp_path, monkeypatch):
+    (tmp_path / "data.parquet").write_text("x")
+    fake, calls = _fake_uploads(tmp_path)
+    monkeypatch.setattr(io_mod, "upload_run", fake)
+
+    url = io_mod.finalize_run(tmp_path, ["# summary", "body"], exclude_figures=True)
+
+    assert url == "https://example/folder-commit"
+    assert [c["kind"] for c in calls] == ["folder", "summary"]
+    assert "summary.md" not in calls[0]["files"]  # the summary cannot go up with the data
+    assert calls[0]["exclude_figures"] is True
+    assert "summary.md" in calls[1]["files"]      # written only after the folder upload succeeded
+    text = (tmp_path / "summary.md").read_text()
+    assert "body" in text and "https://example/folder-commit" in text
+    assert io_mod.dataset_url(tmp_path) in text
+    assert not (tmp_path / "upload_error.txt").exists() and not (tmp_path / "summary_not_uploaded.md").exists()
+
+
+def test_failed_folder_upload_writes_no_summary(tmp_path, monkeypatch):
+    fake, calls = _fake_uploads(tmp_path, fail_on="folder")
+    monkeypatch.setattr(io_mod, "upload_run", fake)
+
+    assert io_mod.finalize_run(tmp_path, ["# s"]) is None
+    assert [c["kind"] for c in calls] == ["folder"]
+    assert not (tmp_path / "summary.md").exists() and not (tmp_path / "summary_not_uploaded.md").exists()
+    assert "folder upload broke" in (tmp_path / "upload_error.txt").read_text()
+
+
+def test_failed_summary_upload_renames_the_summary(tmp_path, monkeypatch):
+    fake, calls = _fake_uploads(tmp_path, fail_on="summary")
+    monkeypatch.setattr(io_mod, "upload_run", fake)
+
+    assert io_mod.finalize_run(tmp_path, ["# s", "body"]) is None
+    assert not (tmp_path / "summary.md").exists()
+    assert "body" in (tmp_path / "summary_not_uploaded.md").read_text()
+    assert "summary upload broke" in (tmp_path / "upload_error.txt").read_text()
+
+
+def test_leftovers_from_a_failed_attempt_are_never_uploaded(tmp_path, monkeypatch):
+    for name in ("summary.md", "summary_not_uploaded.md", "upload_error.txt"):
+        (tmp_path / name).write_text("old")
+    fake, calls = _fake_uploads(tmp_path)
+    monkeypatch.setattr(io_mod, "upload_run", fake)
+
+    io_mod.finalize_run(tmp_path, ["# s"])
+    assert not {"summary.md", "summary_not_uploaded.md", "upload_error.txt"} & set(calls[0]["files"])
+
+
+def test_finalize_run_leaves_the_manifest_untouched(tmp_path, monkeypatch):
+    io_mod.write_manifest(tmp_path, run_id="r1")
+    before = (tmp_path / "manifest.json").read_bytes()
+    fake, _ = _fake_uploads(tmp_path)
+    monkeypatch.setattr(io_mod, "upload_run", fake)
+    io_mod.finalize_run(tmp_path, ["# s"])
+    assert (tmp_path / "manifest.json").read_bytes() == before

@@ -132,14 +132,16 @@ def main() -> None:
                       + (f"; last error: {bg_error}" if bg_error else ""))
     loadings_df = pd.read_parquet(loadings_path)
 
-    (RUN_DIR / "figures").mkdir(parents=True, exist_ok=True)
-    for prefix, best_lang in (("sp_", "es"), ("fr_", "fr")):
-        example_stim = next(s["id"] for s in stim["passages"] if s["id"].startswith(prefix))
-        best_variant = tokens_raw["language_tokens"][best_lang][0]
-        figures.loading_heatmap(
-            loadings_df, example_stim, best_variant, RUN_DIR / "figures" / f"loading_heatmap_{example_stim}.png"
-        )
-    figures.loading_summary_bars(loadings_df, layers, RUN_DIR / "figures" / "loading_summary_bars.png")
+    # The figures' non-tabular choices (which band, which stimulus/token per heatmap) are saved with
+    # the run so make_figures never reads configs/, which may have changed since.
+    heatmaps = [
+        {"stimulus_id": next(s["id"] for s in stim["passages"] if s["id"].startswith(prefix)),
+         "token": tokens_raw["language_tokens"][best_lang][0]}
+        for prefix, best_lang in (("sp_", "es"), ("fr_", "fr"))
+    ]
+    (RUN_DIR / "figure_params.json").write_text(
+        json.dumps({"band": layers, "loading_heatmaps": heatmaps}, indent=2, ensure_ascii=False))
+    figures.make_figures(RUN_DIR, milestone="M2")
 
     pair_scores = {
         name: loading_mod.pair_score(loadings_df, tuple(pair), layers)
@@ -249,6 +251,8 @@ def main() -> None:
         "## 3. Figures",
         "- runs/M2/figures/loading_heatmap_<stimulus>.png (best es/fr variant)",
         "- runs/M2/figures/loading_summary_bars.png",
+        "- Built from runs/M2/loadings.parquet + figure_params.json. Regenerate without the model: "
+        "`python scripts/make_figures.py --milestone M2 --format pdf`.",
         "",
         "## 4. Anomalies / open questions",
         "- This script has not been executed; all numbers above are placeholders pending a real run.",
@@ -259,17 +263,9 @@ def main() -> None:
         f"- runs/M2/clean.parquet sha256: {io_mod.sha256_of(clean_path)}",
     ]
 
-    upload_url = None
-    try:
-        upload_url = io_mod.upload_run(RUN_DIR)
-        summary_lines.append(f"- HF dataset upload: {upload_url}")
-    except Exception as e:  # noqa: BLE001
-        summary_lines.append(f"- HF dataset upload FAILED: {e!r}")
-
-    with open(RUN_DIR / "summary.md", "w") as f:
-        f.write("\n".join(summary_lines))
-
-    io_mod.write_manifest(RUN_DIR, milestone="M2", environment="cuda", upload_url=upload_url)
+    # Interim until M2 moves to run folders (stage 3): manifest written here, then the upload.
+    io_mod.write_manifest(RUN_DIR, milestone="M2", environment="cuda")
+    io_mod.finalize_run(RUN_DIR, summary_lines)
     print("M2 loading pass complete. See runs/M2/summary.md")
 
 
