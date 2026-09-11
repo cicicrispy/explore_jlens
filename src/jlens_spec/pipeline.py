@@ -22,6 +22,9 @@ from . import model as model_mod
 
 BASE_SETTINGS = ["configs/model.yaml", "configs/lens.yaml", "configs/tokens.yaml",
                  "configs/prompt_format.yaml", "stimuli/stimuli.json"]
+# The human's decision to continue although M1's positive control did not pass (check_m1_passed);
+# copied into every real run's settings/ for the record.
+ACCEPTANCE_FILE = "configs/m1_acceptance.yaml"
 
 
 def read_experiment(path) -> dict:
@@ -34,9 +37,11 @@ def is_dryrun(exp: dict) -> bool:
 
 
 def settings_files(exp: dict) -> list[str]:
-    """Every settings file the run copies into settings/ (the bands file is the dry run's own)."""
-    bands = exp["dryrun"]["bands_file"] if is_dryrun(exp) else "configs/bands.yaml"
-    return BASE_SETTINGS + [bands]
+    """Every settings file the run copies into settings/ (the bands file is the dry run's own, and
+    always LAST -- callers read it as [-1]; real runs also copy ACCEPTANCE_FILE)."""
+    if is_dryrun(exp):
+        return BASE_SETTINGS + [exp["dryrun"]["bands_file"]]
+    return BASE_SETTINGS + [ACCEPTANCE_FILE, "configs/bands.yaml"]
 
 
 def runs_root(exp: dict) -> Path:
@@ -104,10 +109,12 @@ def require_finished(run_dir, store, what: str) -> None:
                          "finish it first, or name a finished run in the experiment file")
 
 
-def check_m1_passed(exp: dict, store) -> str:
+def check_m1_passed(exp: dict, store, acceptance_file: str = ACCEPTANCE_FILE) -> str:
     """Invariant 1 (lens before science) and the spec's "if the positive control fails, do not run
     M2": the M1 validation run named in the experiment file must be finished and its causal
-    positive control must have passed. Skipped for dry runs. Returns a line for the summary."""
+    positive control must have passed -- or, if it did not, `acceptance_file` (hand-written by the
+    human after reading that run; decided 2026-09-11) must name exactly that run with a reason.
+    Skipped for dry runs. Returns a line for the summary."""
     if is_dryrun(exp):
         return "M1 validation check: skipped (dry run -- the stand-in has no M1 run)"
     name = exp.get("m1_validate_run")
@@ -117,6 +124,13 @@ def check_m1_passed(exp: dict, store) -> str:
     run_dir = Path("runs/M1") / name
     require_finished(run_dir, store, "M1 validation run")
     info = yaml.safe_load(fetch(run_dir / "check3_positive_control.yaml", store).read_text())
-    if not info.get("passed"):
-        raise SystemExit(f"{run_dir}: the causal positive control did NOT pass -- per the spec, M2/M3 must not run")
-    return f"M1 validation run {name}: finished, causal positive control passed (alphas run {info.get('alphas_run')})"
+    if info.get("passed"):
+        return f"M1 validation run {name}: finished, causal positive control passed (alphas run {info.get('alphas_run')})"
+    with open(acceptance_file) as f:
+        acc = yaml.safe_load(f) or {}
+    if acc.get("validate_run") != name or not str(acc.get("reason") or "").strip():
+        raise SystemExit(f"{run_dir}: the causal positive control did NOT pass -- per the spec, M2/M3 must not run. "
+                         f"To continue anyway (your decision), put validate_run: {name} and your reason into "
+                         f"{acceptance_file}, commit, and start again.")
+    return (f"M1 validation run {name}: finished; causal positive control NOT passed (alphas run "
+            f"{info.get('alphas_run')}), ACCEPTED by the human ({acceptance_file}): {acc['reason'].strip()}")

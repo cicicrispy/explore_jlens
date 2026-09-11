@@ -66,6 +66,44 @@ def test_check3_runs_the_papers_control_at_every_position(standin_model, random_
     assert all(int(0.25 * depth) <= l < int(0.75 * depth) for l in info["layers"])
 
 
+def test_check3_saves_the_lens_readout_for_every_condition(standin_model, random_lens):
+    """The readout on the antonym prompt: top-k at every covered layer and position for the clean
+    pass and each swap run; the readout tokens' ranks agree with it; below the swap's layers the
+    swapped readout is the clean one (nothing edited yet)."""
+    with open("configs/experiments/m1_validate.yaml") as f:
+        cfg = yaml.safe_load(f)["check3_positive_control"]
+    r = m1_checks.check3_positive_control(standin_model, random_lens, cfg, save_k=10)
+    info, n = r["info"], r["info"]["n_tokens"]
+    conditions = [x["condition"] for x in r["results"]]
+    ro, rk = pd.DataFrame(r["readout"]), pd.DataFrame(r["ranks"])
+    assert len(ro) == len(conditions) * len(random_lens.layers) * n
+    assert len(rk) == len(conditions) * len(random_lens.layers) * n * len(info["readout_tokens"])
+    assert set(info["readout_tokens"]) | set(info["readout_tokens_not_single"]) == set(cfg["readout_tokens"])
+    assert (rk["rank"] >= 1).all() and all(len(t) == 10 for t in ro["topk_ids"])
+    top1 = {(x.condition, x.layer, x.pos): x.topk_ids[0] for x in ro.itertuples()}
+    for x in rk[rk["rank"] == 1].itertuples():
+        assert top1[(x.condition, x.layer, x.pos)] == x.token_id
+    ro = ro.set_index(["condition", "layer", "pos"]).sort_index()
+    below = [l for l in random_lens.layers if l < info["layers"][0]]
+    for cond in conditions[1:]:
+        for l in below:
+            for q in range(n):
+                assert list(ro.loc[(cond, l, q), "topk_ids"]) == list(ro.loc[("clean", l, q), "topk_ids"])
+
+
+def test_summarize_check3_readout_hand_built():
+    ranks = pd.DataFrame({"condition": ["clean"] * 4 + ["swap_alpha1"] * 2,
+                          "layer": [1, 2, 2, 3, 2, 3], "pos": [1, 1, 0, 1, 1, 1],
+                          "token": [" big"] * 6, "token_id": [7] * 6, "rank": [5, 3, 1, 9, 40, 50],
+                          "logit": [0.0] * 6})
+    readout = pd.DataFrame({"condition": ["clean", "clean"], "layer": [2, 3], "pos": [1, 1],
+                            "topk_text": [["a", "b", "c", "d", "e", "f"], ["x"] * 6]})
+    s = m1_checks.summarize_check3_readout(ranks, readout, pos=1, layers=[2, 3], band=[2, 3])
+    assert s["ranks"] == {"clean": {" big": {2: 3, 3: 9}}, "swap_alpha1": {" big": {2: 40, 3: 50}}}
+    assert s["top5"] == {"clean": {2: ["a", "b", "c", "d", "e"], 3: ["x"] * 5}}
+    assert s["best"] == {" big": (1, 2, 0)}  # layer 1 is outside the band; position 0 counts
+
+
 def test_check4_ranks_and_kurtosis_per_position_and_layer(standin_model):
     lens = _small_lens(standin_model)
     p = _prompts(standin_model)[0]

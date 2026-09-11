@@ -44,6 +44,14 @@ check3_positive_control:
   positions: all
   layer_range: [0.25, 0.75]  # lens layers from 25% up to (not including) 75% of the model's depth
   alphas: [1.0, 2.0]         # 1.0 is the paper's swap; 2.0 runs only if 1.0 fails (spec)
+  # Reported only (never used by the check): the rank of each of these tokens in the lens readout
+  # on this prompt, at every covered layer and position, clean and under each swap
+  # (check3_ranks.parquet; the full top-100 readout is check3_readout.parquet). Tokens that are not
+  # a single token are listed in the summary and skipped.
+  readout_tokens: [" big", "big", " Big", "Big", " bigger", "bigger",
+                   " long", "long", " Long", "Long", " longer", "longer",
+                   " large", "large", "大", "长", "小", "短"]
+  readout_summary_every: 4   # the summary's tables show every 4th covered layer (plus the last)
 
 # Step 4: band signatures (the human reads the figure and fills configs/bands.yaml).
 check4_band_signatures:

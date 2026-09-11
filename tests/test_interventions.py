@@ -290,6 +290,25 @@ def test_apply_takes_its_targets_from_the_clean_run_across_the_band(standin_mode
     assert gap > 1e-3 * scale
 
 
+def test_apply_records_the_stream_the_next_layer_receives(standin_model, random_lens):
+    """`record`: with no edit, the recorded stream is the clean one; under a swap, the positions
+    before the first edited one never change (the model is causal), and after the band the edited
+    positions carry the edit on."""
+    p, _, mask, layers = _trace_setup(standin_model, random_lens)
+    rec = list(random_lens.layers[:6])  # the 4 edited layers and 2 after them
+    clean = iv.clean_states(standin_model, p, rec)
+    _, _, same = iv.apply(standin_model, random_lens, p, "identity", layers, mask, record=rec)
+    assert sorted(same) == rec
+    for l in rec:
+        assert torch.allclose(same[l], clean[l][0], atol=1e-6)
+    _, _, edited = iv.apply(standin_model, random_lens, p, "swap", layers, mask, record=rec,
+                            s_token=" Spanish", t_token=" French")
+    for l in rec:
+        assert torch.allclose(edited[l][~mask], clean[l][0][~mask], atol=1e-6)
+    after = rec[-1]
+    assert not torch.allclose(edited[after][mask], clean[after][0][mask], atol=1e-3)
+
+
 def test_edit_problems_reports_spills_and_unchanged_positions():
     mask = torch.tensor([False, True, True])
     changes = {3: [0.0, 1.0, 0.0], 4: [0.1, 2.0, 5e-8]}

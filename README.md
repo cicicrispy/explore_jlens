@@ -14,8 +14,11 @@ As of 2026-09-11 (you run everything yourself and report back; the assistant wri
   `runs/M1/download_Qwen3.6-27B_20260911-194736` (lens `0731326e…`, 63 layers, width matches).
   First validation `runs/M1/validate_20260911-201047` stopped at the positive control: the swap as
   the spec wrote it undoes itself across the band (each layer flips back what the one before
-  flipped). The swap is now **clamped to the clean pass** ("Departures from the spec"); validation
-  is to be run again.
+  flipped). The swap is now **clamped to the clean pass** ("Departures from the spec"). Second
+  validation `runs/M1/validate_20260911-203842` (clamped): the answer moves towards 长 with alpha
+  but does not flip (大/长 logits: clean 19.0/12.9, alpha 1 18.6/15.6, alpha 2 17.4/17.25). You
+  decided to continue: M1 now always runs check 4, check 3 also saves the lens readout on the
+  prompt, and M2/M3 need your acceptance in `configs/m1_acceptance.yaml`. Third validation next.
 - **M2, M3: code written (stage 3), not executed.** Run folders, one file per prompt, uploads as each
   prompt finishes, resume, controls picked by rule in a separate step you review, two position sets,
   a Mac dry run.
@@ -183,10 +186,16 @@ afterwards from the saved files (`src/jlens_spec/m1_checks.py`):
   `"小"的反义词是"` (no chat template), ` big`->` long` and ` bigger`->` longer` swapped at **every**
   token position across layers 25-75% of depth (each pair clamped in turn to the clean pass's
   coordinates, swapped); 长 should become the top-1 answer instead of 大. Alpha 2
-  runs only if alpha 1 fails; if both fail, M1 stops (do not run M2 -- M2 and M3 refuse to start
-  unless the M1 run you name passed). Where the stream actually changed is measured at every
+  runs only if alpha 1 fails. If both fail, M1 still runs to the end (check 4 included) and its
+  summary says **POSITIVE CONTROL NOT PASSED**; M2 and M3 then refuse that run unless you name it,
+  with your reason, in `configs/m1_acceptance.yaml` (`validate_run:` + `reason:`), commit, and
+  start them (decided 2026-09-11; the spec: stop). Where the stream actually changed is measured at every
   position, and any change outside the planned positions stops the run; the mask figures
-  (`masks/check3_*`) are drawn from those measured changes.
+  (`masks/check3_*`) are drawn from those measured changes. The lens readout on the prompt is saved
+  too (`check3_readout.parquet`: top-100 at every covered layer and position, clean and under each
+  swap; `check3_ranks.parquet`: the ranks of `readout_tokens` from the experiment file), and the
+  summary shows it at the last position every 4th layer -- which forms of big/long the lens
+  actually reads (added 2026-09-11 after the control's partial result).
 - band signatures (CKA + next-token agreement + kurtosis by layer, at every non-template position --
   the instruction text included) into `band_signatures.parquet` and `figures/png/band_signatures.png`.
   **You** then fill all three bands in `configs/bands.yaml` (`workspace`, `full`, `early_late`) by
@@ -460,6 +469,12 @@ A cell with no clean baseline records `flip=None`, `top1_changed=None`, `clean_m
 unknown, not "no effect" -- and `panel_c` leaves those out of the flip rates.
 
 ## Departures from the spec (all decided with the human)
+
+- **A failed positive control can be accepted in writing** (decided 2026-09-11; the spec: "if both
+  fail, stop; do not run M2"): on Qwen3.6-27B the clamped swap moves the answer towards 长 but does
+  not flip it, and the paper's results are on Claude models. M1 always runs to the end; M2/M3 accept
+  an M1 run whose control did not pass only if `configs/m1_acceptance.yaml` names that run with a
+  reason, which their summaries quote (`pipeline.check_m1_passed`).
 
 - **The swap is clamped to the clean pass** (decided 2026-09-11, after M1 run
   `validate_20260911-201047`): the spec's reference loop flips the stream's *current* coordinates at

@@ -123,7 +123,10 @@ def check3_positive_control(model, lens, cfg: dict, save_k: int) -> dict:
     Where the stream actually changed is measured at every position (apply(return_changes=True));
     any change outside the planned positions raises. Returns rows for: `results` (one per
     condition), `masks` (M0-style per-token rows, `edited` = actually changed at any layer),
-    `changes` (per condition, layer, position), plus `info`."""
+    `changes` (per condition, layer, position), `readout` (the lens's top-`save_k` at every covered
+    layer and position, per condition: what the lens reads on this prompt, clean and under each
+    swap), `ranks` (the rank of each of cfg["readout_tokens"] in that readout -- reported only),
+    plus `info`."""
     tok = model.tokenizer
     text = cfg["prompt"]
     enc = tok(text, add_special_tokens=False, return_offsets_mapping=True)
@@ -160,15 +163,44 @@ def check3_positive_control(model, lens, cfg: dict, save_k: int) -> dict:
                 "top1_is_expected_swapped": top[0] == swapped_id,
                 "topk_ids": top, "topk_text": [tok.decode([t]) for t in top], "topk_logits": vals.tolist()}
 
+    # What the lens reads on this prompt, at every covered layer and position, for the clean pass and
+    # each swap: the top-`save_k` readout, and the rank of each of cfg["readout_tokens"] (reported,
+    # never used by the check itself).
+    probes = {t: tok.encode(t, add_special_tokens=False) for t in cfg.get("readout_tokens", [])}
+    probe_ids = {t: ids[0] for t, ids in probes.items() if len(ids) == 1}
+    readout_rows, rank_rows = [], []
+
+    def read(condition, stream):
+        for l in lens.layers:
+            logits_l = lens_mod._transport_unembed(model, lens, stream[l], l).float()  # [n, vocab]
+            vals, ids = torch.topk(logits_l, save_k, dim=-1)
+            for q in range(n):
+                top = [int(i) for i in ids[q].tolist()]
+                readout_rows.append({"condition": condition, "layer": int(l), "pos": q,
+                                     "token_text": text[offsets[q][0]:offsets[q][1]], "topk_ids": top,
+                                     "topk_text": [tok.decode([t]) for t in top],
+                                     "topk_logits": vals[q].tolist()})
+            for t, i in probe_ids.items():
+                target = logits_l[:, i:i + 1]
+                ranks = (1 + (logits_l > target).sum(dim=-1)).tolist()
+                rank_rows.extend({"condition": condition, "layer": int(l), "pos": q, "token": t, "token_id": i,
+                                  "rank": int(ranks[q]), "logit": float(target[q, 0])} for q in range(n))
+
+    clean_stream = {}
     with model.trace(input_ids):
+        for l in lens.layers:  # a plain loop: see check4_positions
+            clean_stream[l] = model_mod.layer_output(model, l).float()[0].save()
         clean = model.output.logits[0, n - 1].float().save()
     results = [result_row("clean", None, clean)]
+    read("clean", clean_stream)
     states = iv.clean_states(model, p, layers)  # the clamps' targets (interventions module docstring)
     masks, change_rows, unchanged_all = [], [], []
     for alpha in cfg["alphas"]:
         condition = f"swap_alpha{alpha:g}"
-        logits, _logs, changes = iv.apply(model, lens, p, "swap", layers, mask,
-                                          return_changes=True, clean=states, pairs=pairs, alpha=alpha)
+        logits, _logs, changes, stream = iv.apply(model, lens, p, "swap", layers, mask, return_changes=True,
+                                                  clean=states, record=list(lens.layers), pairs=pairs,
+                                                  alpha=alpha)
+        read(condition, stream)
         outside, unchanged = iv.edit_problems(changes, mask, "swap")
         if outside:
             raise RuntimeError(f"{condition}: the stream changed at unplanned positions "
@@ -191,8 +223,28 @@ def check3_positive_control(model, lens, cfg: dict, save_k: int) -> dict:
             "alphas_run": [r["alpha"] for r in results[1:]],
             "clean_top1_is_expected": results[0]["top1_is_expected_clean"],
             "passed": any(r["top1_is_expected_swapped"] for r in results[1:]),
-            "planned_positions_unchanged": unchanged_all}
-    return {"results": results, "masks": masks, "changes": change_rows, "info": info}
+            "planned_positions_unchanged": unchanged_all,
+            "readout_tokens": list(probe_ids),
+            "readout_tokens_not_single": [t for t in probes if t not in probe_ids]}
+    return {"results": results, "masks": masks, "changes": change_rows, "info": info,
+            "readout": readout_rows, "ranks": rank_rows}
+
+
+def summarize_check3_readout(ranks: pd.DataFrame, readout: pd.DataFrame, pos: int, layers: list[int],
+                             band: list[int]) -> dict:
+    """From check3's saved rows: {"ranks": {condition: {token: {layer: rank}}} at position `pos` and
+    the given `layers`; "top5": {condition: {layer: [text, ...]}} there; "best": {token: (rank,
+    layer, pos)} -- each token's best clean rank over every position and the `band` layers}."""
+    at = ranks[(ranks["pos"] == pos) & ranks["layer"].isin(layers)]
+    table = {c: {t: dict(zip(g2["layer"].astype(int), g2["rank"].astype(int))) for t, g2 in g.groupby("token", sort=False)}
+             for c, g in at.groupby("condition", sort=False)}
+    ro = readout[(readout["pos"] == pos) & readout["layer"].isin(layers)]
+    top5 = {c: {int(r["layer"]): list(r["topk_text"])[:5] for _, r in g.iterrows()}
+            for c, g in ro.groupby("condition", sort=False)}
+    clean = ranks[(ranks["condition"] == "clean") & ranks["layer"].isin(band)]
+    best = {t: (int(r["rank"]), int(r["layer"]), int(r["pos"]))
+            for t, g in clean.groupby("token", sort=False) for r in [g.loc[g["rank"].idxmin()]]}
+    return {"ranks": table, "top5": top5, "best": best}
 
 
 # ------------------------------------------------------------------ check 4: band signatures

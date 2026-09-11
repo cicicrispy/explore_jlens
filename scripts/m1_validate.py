@@ -9,7 +9,7 @@ the top-`save_topk` tokens (and check 4 the rank of the model's real next token)
 is judged at is applied afterwards from those files (jlens_spec/m1_checks.py). Nothing under
 configs/ is written.
 
-NOT executed yet.
+First run on the GPU box 2026-09-11 (validate_20260911-201047).
 """
 from __future__ import annotations
 
@@ -55,6 +55,34 @@ def _step(n: int, msg: str) -> None:
 
 def _top5(row) -> list:
     return [(str(t), round(float(v), 3)) for t, v in zip(list(row["topk_text"])[:5], list(row["topk_logits"])[:5])]
+
+
+def _readout_lines(readout, ranks, info, lens_layers, every: int) -> list[str]:
+    """Check 3's lens readout in the summary: at the LAST position (where the answer is predicted),
+    the clean top-5 and each readout token's rank, at every `every`-th covered layer (plus the last);
+    and each token's best clean rank anywhere within the swap's layers."""
+    layers = list(lens_layers)[::every]
+    if layers[-1] != lens_layers[-1]:
+        layers.append(lens_layers[-1])
+    last = info["n_tokens"] - 1
+    s = m1_checks.summarize_check3_readout(ranks, readout, last, layers, info["layers"])
+    where = f"the last position ({info['tokens'][last]!r})"
+    lines = [f"  - lens readout on this prompt (check3_readout.parquet: top-100 at every covered layer and "
+             f"position, clean and under each swap; check3_ranks.parquet: the ranks of the readout tokens):"]
+    if info["readout_tokens_not_single"]:
+        lines.append(f"    - not a single token, skipped: {info['readout_tokens_not_single']}")
+    best = "; ".join(f"{t!r} {r} (layer {l}, position {q} {info['tokens'][q]!r})"
+                     for t, (r, l, q) in s["best"].items())
+    lines.append(f"    - best clean rank within layers {info['layers'][0]}..{info['layers'][-1]}, any position: {best}")
+    lines.append(f"    - clean, {where}, lens top-5 by layer:")
+    lines += [f"      - layer {l}: {top}" for l, top in s["top5"].get("clean", {}).items()]
+    for cond, table in s["ranks"].items():
+        lines += ["", f"    Rank at {where}, {cond}:", "",
+                  "    | token | " + " | ".join(str(l) for l in layers) + " |",
+                  "    |---|" + "---|" * len(layers)]
+        lines += [f"    | {t!r} | " + " | ".join(str(by_layer.get(l, "")) for l in layers) + " |"
+                  for t, by_layer in table.items()]
+    return lines
 
 
 def main() -> None:
@@ -109,12 +137,15 @@ def main() -> None:
     df3 = save(r3["results"], "check3_results.parquet")
     save(r3["masks"], "check3_masks.parquet")
     save(r3["changes"], "check3_changes.parquet")
+    readout3 = save(r3["readout"], "check3_readout.parquet")
+    ranks3 = save(r3["ranks"], "check3_ranks.parquet")
     info = r3["info"]
     with open(run.dir / "check3_positive_control.yaml", "w") as f:
         yaml.safe_dump(info, f, sort_keys=False, allow_unicode=True)
+    readout_lines = _readout_lines(readout3, ranks3, info, lens.layers, pc.get("readout_summary_every", 4))
 
     head = [
-        f"# M1 summary -- run {run.run_id}" + ("" if info["passed"] else " -- STOPPED"), "",
+        f"# M1 summary -- run {run.run_id}" + ("" if info["passed"] else " -- POSITIVE CONTROL NOT PASSED"), "",
         "## 1. Environment",
         "- Environment: cuda (Phase B)",
         f"- git commit: {run.manifest()['git_commit']}",
@@ -142,18 +173,14 @@ def main() -> None:
         f"{len(info['planned_positions_unchanged'])}" + (f" {info['planned_positions_unchanged'][:10]}"
                                                          if info['planned_positions_unchanged'] else "") + ".",
         f"  - mask figures: figures/png/masks/check3_*.png",
+        *readout_lines,
     ]
+    if not info["passed"]:
+        head += [f"  - **NOT PASSED** at alphas {info['alphas_run']} (the spec's test: {pc['expect_swapped']} "
+                 "top-1). M1 goes on to check 4 regardless (decided 2026-09-11); M2 and M3 refuse this run "
+                 "unless configs/m1_acceptance.yaml names it with your reason."]
     credit = (download_dir / "CREDIT.md").read_text() if (download_dir / "CREDIT.md").exists() else "(missing)"
     tail = ["", "## Lens CREDIT.md (from the download run)", credit, "", "## Artifact URL"]
-
-    if not info["passed"]:
-        figures.make_figures(run.dir)  # the check 2 readout grid and the check 3 masks still get drawn
-        io_mod.finalize_run(run.dir, head + ["", "## STOPPED",
-                                             f"Causal positive control failed at alphas {info['alphas_run']}. "
-                                             "Do not run M2. Details: check3_positive_control.yaml, "
-                                             "check3_results.parquet."] + tail)
-        print("STOP: causal positive control failed. Do not run M2.", file=sys.stderr)
-        sys.exit(1)
 
     _step(4, "Check 4 (band signatures: CKA, next-token agreement, kurtosis) ...")
     c4 = exp["check4_band_signatures"]
@@ -180,6 +207,7 @@ def main() -> None:
         "## 5. Parquet sha256s",
         *[f"- {n} sha256: {io_mod.sha256_of(run.dir / n)}" for n in
           ("check1_final_layer.parquet", "check2_readout.parquet", "check3_results.parquet",
+           "check3_readout.parquet", "check3_ranks.parquet",
            "check4_positions.parquet", "band_signatures.parquet", "cka.parquet")],
     ] + tail
     url = io_mod.finalize_run(run.dir, summary_lines)
@@ -188,6 +216,9 @@ def main() -> None:
               f"(see {run.dir}/upload_error.txt).")
     else:
         print(f"M1 validation complete. See {run.dir}/summary.md")
+    if not info["passed"]:
+        print(f"NOTE: the causal positive control did NOT pass. M2/M3 will refuse this run unless "
+              f"configs/m1_acceptance.yaml names {run.run_id} with your reason.", file=sys.stderr)
 
 
 if __name__ == "__main__":

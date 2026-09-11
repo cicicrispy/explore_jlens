@@ -9,8 +9,9 @@ signed off. M1's tokenizer step has run on a Mac with the final prompt format (n
 and the model and lens have been downloaded on the GPU machine (lens version `0731326e`, 63 layers,
 width 5,120 as the model's). The first lens validation (`validate_20260911-201047`) stopped at the
 causal positive control; its swap turned out to undo itself across the band, and the swap is now
-clamped to the clean pass (Section 5). The validation is to be run again; M2 and M3 have **not** run
-on the real model yet. The whole M2 → M3 pipeline has been exercised end to end on a Mac "dry run" (a small
+clamped to the clean pass (Section 5). The second (`validate_20260911-203842`) moved the answer
+towards the expected one without flipping it; the lens readout on the control prompt is being added
+before deciding the next step. M2 and M3 have **not** run on the real model yet. The whole M2 → M3 pipeline has been exercised end to end on a Mac "dry run" (a small
 stand-in model with a **random** lens), which checks the machinery only: its numbers carry no
 information. Section 12 lists what is pending.
 
@@ -362,8 +363,13 @@ masks rendered, and one swap and one identity cell with a random lens. Done and 
      antonym of 'small' is"), no chat template; the swaps " big"→" long" and " bigger"→" longer" at
      every token position across the lens layers from 25% to 75% of depth; 长 ("long") should
      replace 大 ("big") as the top answer. α = 1, and α = 2 only if α = 1 fails. If both fail, the
-     project stops: a null result from an unvalidated lens would be uninterpretable (hygiene
-     invariant 1).
+     specification stops the project: a null result from an unvalidated lens would be
+     uninterpretable (hygiene invariant 1). Here the human may instead accept a failed control in
+     writing (Section 11, "Stop rule"); M1 runs to the end either way. Alongside, the lens readout on this prompt is saved at every covered layer and
+     position, clean and under each swap (top 100), with the ranks of the forms of *big*, *bigger*,
+     *long*, *longer*, *large* (with and without a leading space, capitalized) and of 大, 长, 小, 短 —
+     reported only, to show which forms the lens actually reads (the paper: "the Jacobian lens at
+     intermediate layers shows the English tokens big and bigger").
    - **band signatures** by layer — linear CKA between layers on the geometry of the lens vectors
      (5,000 tokens sampled uniformly, seed 0); next-token agreement (how often the model's own top-1
      next-token prediction is the lens readout's top-1, or in its top-5, at that layer) at every
@@ -501,6 +507,7 @@ that. No hypothesis tests are run at this stage.
 | Skipped start positions | skip the first ~4 positions (invariant 3) | none (`skip_first` = 0) | the paper swaps across all question tokens; the first positions are template tokens, never edited |
 | Swap across a band | at every band layer, flip the stream's current coordinates (reference code) | at every band layer, set the two coordinates to the clean pass's, swapped (α-scaled); controls clamped the same way; sizes measured on the clean pass (Section 5) | the reference loop undoes itself layer by layer (first M1 run); the paper calls the swap a clamp |
 | M1 positive control | — | edits every position (incl. the first), raw prompt | exactly as in the paper; this control only |
+| Stop rule of the positive control | if it fails at α = 1 and α = 2, stop; do not run M2 | M1 always runs to the end (check 4 included) and reports the result; M2/M3 refuse a run whose control did not pass unless the human names that run with a reason in `configs/m1_acceptance.yaml` | on Qwen3.6-27B the clamped swap moves the answer towards the expected one but does not flip it; the paper's results are on Claude models; the human judged an effect sufficient (2026-09-11) |
 | M3 position sets | question only | question **and** message | the paper's text says "across the question tokens", its figure panels "at every position"; both run |
 | Invariant 7's stop | positives before anomaly; stop if they don't flip | positives and anomaly as separate runs; the human reads the positives summary before the anomaly run | a human decision, no threshold |
 | Control tokens | proposed by rule in M2, approved by a human, copied into `tokens.yaml` | proposed by rule in a separate controls run per position set, read by the human, who extends the blocklist and re-picks if needed; the accepted run is named in the first M3 run (Section 6.1) | the picks depend on the band and the positions, known only per position set; each attempt stays on record |
@@ -577,6 +584,15 @@ All dates 2026-09-11 unless noted.
   notes call the swap a clamp at every band layer. Decided: clamp to the clean pass (target =
   c_clean + α·(flip(c_clean) − c_clean)); two pairs clamped in turn, each in its own basis; all
   controls are clamps too, sized on the clean pass (Section 5, 6). M1 validation to be run again.
+- Second M1 validation, clamped (`validate_20260911-203842`): the clamp behaves as designed (the
+  full edit at layer 16, smaller corrections at every later layer; α = 2 twice α = 1), and the answer
+  moves towards 长 with α but does not flip — logits 大 / 长: clean 19.0 / 12.9, α = 1 18.6 / 15.6,
+  α = 2 17.4 / 17.25. The paper's code confirmed to match ours on layer indexing (block outputs) and
+  readout (final norm + unembedding). The paper names Claude models for its results; Qwen appears
+  only as readouts on Neuronpedia. Added: check 3 saves the lens readout on the prompt (which forms
+  of big / long the lens reads). Decided by the human: continue — "as long as there is an effect,
+  the manipulation is working". M1 now always runs check 4; the acceptance is written in
+  `configs/m1_acceptance.yaml` after reading the next M1 run, and M2/M3 check it and quote it.
 - Figures: M3 summary and combined figures uploaded to the dataset, mask figures and M2 figures not;
   added the flip heatmap, the margin change and the M2 rank heatmaps; panel c kept exactly as
   specified.

@@ -229,7 +229,7 @@ def clean_states(model, prompt, layers) -> dict:
 
 
 def apply(model, lens, prompt, kind: str, layers: list[int], mask, return_changes: bool = False,
-          clean: dict | None = None, **kw):
+          clean: dict | None = None, record: list[int] | None = None, **kw):
     """Register `kind` on layer_output(model, l) for each l in `layers`, ascending, inside one
     trace. Each layer sees the already-edited stream and CLAMPS its coordinates to targets from the
     clean run (module docstring): `clean` = clean_states(model, prompt, layers), or None to record
@@ -238,7 +238,8 @@ def apply(model, lens, prompt, kind: str, layers: list[int], mask, return_change
     `return_changes` -- `changes`: {layer: [float per position]}, the size ||h_new - h|| of what was
     actually written at EVERY position (not only the planned ones; see `edit_problems`). The logs
     only describe the planned positions, so they cannot show an edit that landed elsewhere; `changes`
-    can.
+    can. Plus -- if `record` (a list of layers, edited or not) -- `states`: {layer: Tensor[pos, d]
+    float32}, the stream as the next layer receives it (after that layer's edit, if any).
 
     Always asserts that the sequence inside the trace is exactly as long as `mask` (i.e. the prompt
     the mask was built on) -- a shifted sequence would put every edit on the wrong token.
@@ -267,9 +268,16 @@ def apply(model, lens, prompt, kind: str, layers: list[int], mask, return_change
     assert not missing, f"no clean state for layers {missing}: the clamps' targets come from the clean run"
 
     changes: dict[int, list[float]] = {}
+    record = sorted(set(record or []))
+    states: dict[int, torch.Tensor] = {}
     with model.trace(prompt.input_ids):
-        for l in sorted(layers):
+        # Ascending over edited and recorded layers together: inside a trace, layers must be reached
+        # in the order the model runs them.
+        for l in sorted(set(layers) | set(record)):
             env = model_mod.layer_output(model, l)
+            if l not in layers:  # recorded only
+                states[l] = env.float()[0].save()
+                continue
             h = env.float()
             assert h.shape[1] == len(mask), (
                 f"the sequence in the trace has {h.shape[1]} positions but the mask has {len(mask)} "
@@ -309,14 +317,16 @@ def apply(model, lens, prompt, kind: str, layers: list[int], mask, return_change
 
             if return_changes:
                 changes[l] = (h_new - h)[0].norm(dim=-1).tolist()
-            model_mod.layer_output(model, l)[:] = h_new.to(env.dtype)
+            written = h_new.to(env.dtype)
+            model_mod.layer_output(model, l)[:] = written
+            if l in record:
+                states[l] = written.float()[0].save()
             all_logs.extend(logs)
 
         logits = model.output.logits[0, prompt.metric_pos].float().save()
 
-    if return_changes:
-        return logits, all_logs, changes
-    return logits, all_logs
+    out = (logits, all_logs) + ((changes,) if return_changes else ()) + ((states,) if record else ())
+    return out
 
 
 def edit_problems(changes: dict, mask, kind: str) -> tuple[list, list]:
