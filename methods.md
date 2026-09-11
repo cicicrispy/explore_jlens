@@ -251,13 +251,15 @@ among them the tiers use that check's coverage (≥ the swapped-in token's) and 
 do, and is then flagged.
 
 **big non-label — one set for every check.** The pairs do not touch the label and serve all 16
-checks, so their rules must hold in each. Pairs are formed from 20 candidates — those meeting the
-coverage bar first, then the widest coverage; each member's coverage must reach the larger of the two
-treatment tokens' in every check. Because the edit is
-scaled to the treatment's ‖Δh‖, its |Δc| afterwards no longer depends on the state at all: at each
-layer it equals (‖v_s − v_t‖ / ‖v_a − v_b‖) × the treatment's |Δc|. Pairs are therefore judged on
-the |Δc| they will have **after** scaling, computed from the clean pass and the lens vectors. The
-three chosen pairs share no token.
+checks, so their rules must hold in each. The swap is symmetric, so each member stands in for either
+language token: a member's coverage is compared with the larger of the two treatment tokens'
+coverage, in every check. Pairs are formed from a pool of 20 candidates: those whose coverage reaches
+100% of that bar in every check come first, then those reaching 75%, then the rest, each group
+ordered by its mean coverage over the checks. Because the edit is scaled to the treatment's ‖Δh‖, its
+|Δc| afterwards no longer depends on the state at all: at each layer it equals
+(‖v_s − v_t‖ / ‖v_a − v_b‖) × the treatment's |Δc|. Pairs are therefore judged on the |Δc| they will
+have **after** scaling, computed from the clean pass and the lens vectors. The three chosen pairs
+share no token.
 
 **Tiers and choice.** Tier 1: every ratio (coverage and |Δc|) at least 100% of the treatment's — in
 its check (label-to-present) or in every check (big non-label); tier 2: at least 75%; tier 3: the
@@ -462,6 +464,7 @@ that. No hypothesis tests are run at this stage.
 | Directions | m2i and i2m | both kept, though swap / big non-label / random are the same edit in both | the literal grid; agreement reported |
 | M2 layers | the workspace band | every lens layer (bands still used for scores) | record everything once |
 | Stored top tokens | top-5 | top-100 everywhere | any smaller k can be applied later |
+| CKA matrix file | `.npy` beside the heatmap | `cka.parquet` in the M1 run folder (uploaded) | a table converts to `.npy` in one line; one file format for all data |
 | Figures on the dataset | (not specified; M0's upload included its figures) | only M3's summary figures and the combined figures | the data is uploaded; figures are redrawable |
 | Extra figures | panel c, margin vs \|Δc\| | also flip heatmap, margin change, M2 rank heatmaps | presentation |
 | Question key | `content_probe` | `content` | naming |
