@@ -2,6 +2,6 @@
 # (scripts chdir there via env.bootstrap()). On the GPU box, point `cuda` at the large disk.
 hf_home:
   mac: ".hf_cache"
-  cuda: ".hf_cache"   # TODO(human): set to the large disk on the GPU box before M1.
+  cuda: "/lambda/nfs/filesys/hf_cache"   # the Lambda filesystem (persists across instances): model + lens downloaded once
 
 runs_dir: "runs"
