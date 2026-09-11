@@ -12,7 +12,7 @@ band: workspace
 
 # REQUIRED: folder names of finished runs.
 from_m2_run: loading_20260911-211140
-positives_run: null        # runs/M3/<this>/, e.g. positives_message_20260912-031000
+positives_run: positives_message_20260911-221446   # runs/M3/<this>/ (its controls are reused)
 m1_validate_run: validate_20260911-205658
 
 directions: [m2i, i2m]
