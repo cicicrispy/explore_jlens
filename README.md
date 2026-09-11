@@ -21,7 +21,13 @@ As of 2026-09-11 (you run everything yourself and report back; the assistant wri
   prompt, and M2/M3 need your acceptance in `configs/m1_acceptance.yaml`. Third validation
   `runs/M1/validate_20260911-205658` ran to the end and is **accepted**; bands filled from it
   (workspace [18, 55], full [18, 62], early_late [[18, 33], [45, 55]]). **M2 next.**
-- **M2, M3: code written (stage 3), not executed.** Run folders, one file per prompt, uploads as each
+- **M2: done.** `runs/M2/loading_20260911-211140` (accuracy 16/16 per question; treatment pair `zh`
+  西班牙语 / 法语).
+- **M3: in progress.** Controls accepted: `controls_question_20260911-213928`,
+  `controls_message_20260911-214953`. `positives_question_20260911-215308` ran: no flips at the
+  question positions (the question precedes the passage, so those tokens carry no passage language);
+  the `message` set is the main test. Next: `positives_message`, then the anomaly runs.
+- **Earlier note (code, stage 3):** Run folders, one file per prompt, uploads as each
   prompt finishes, resume, controls picked by rule in a separate step you review, two position sets,
   a Mac dry run.
 

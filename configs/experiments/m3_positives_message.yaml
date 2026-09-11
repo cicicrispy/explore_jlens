@@ -17,7 +17,7 @@ band: workspace
 
 # REQUIRED: folder names of finished runs.
 from_m2_run: loading_20260911-211140
-controls_run: null         # runs/M3/<this>/, e.g. controls_message_20260912-031000
+controls_run: controls_message_20260911-214953   # runs/M3/<this>/: the controls run you accepted (2026-09-11)
 m1_validate_run: validate_20260911-205658
 
 directions: [m2i, i2m]

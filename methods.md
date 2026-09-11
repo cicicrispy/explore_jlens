@@ -622,7 +622,21 @@ All dates 2026-09-11 unless noted.
   other languages (' ภาษา', ' زبان', ' lingua', ' bahasa') and other foreign words (' jedynie'),
   which name no language, and odd tokens such as '\\n', ':I', ':H'. Accepted for the question set:
   `controls_question_20260911-213928` (none of the three additions was among its picks). The
-  message set's controls are picked once more with the final blocklist.
+  message set's controls were picked once more with the final blocklist
+  (`controls_message_20260911-214953`, accepted): exactly one pick changed, *Universidad* →
+  '/questions' in the anomaly_fr_i2m check; everything else identical.
+- First real M3 run, `positives_question_20260911-215308` (question positions, report + hello): no
+  flips for the treatment (0/16 in each question, as for identity), mean margin shifts of −0.04 and
+  +0.03 log units, smaller than the random-direction control's (+0.06, +0.16). This is what the
+  prompt order predicts: the question precedes the passage, so the question tokens carry nothing
+  about the passage's language (M2's loadings there are the same whichever passage follows). The
+  human decided to run the question set's anomaly run anyway, for completeness, and to treat the
+  `message` position set — which edits the passage itself, and which the paper's own figure marks
+  as "at every position" — as the main test.
+- Numerical note from the same run: the two directions, the same edit mathematically, agree only to
+  about 0.5 log units somewhere in the vocabulary on the bf16 27B model (0/32 cell pairs within one
+  16-bit step, against 32/32 in the Mac dry runs); the answer-set margins still agree to about 0.02
+  and the flip counts are identical. Cause: bf16 rounding amplified through 38 clamped layers.
 - Figures: M3 summary and combined figures uploaded to the dataset, mask figures and M2 figures not;
   added the flip heatmap, the margin change and the M2 rank heatmaps; panel c kept exactly as
   specified.
