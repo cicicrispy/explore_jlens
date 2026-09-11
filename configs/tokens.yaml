@@ -7,18 +7,31 @@ pairs:                       # form-matched; order = (es, fr)
   lower:  [" spanish", " french"]
   zh:     ["西班牙语", "法语"]
 controls:
-  # Control tokens are NOT hand-picked and NOT listed here: scripts/m3_grid.py picks them
-  # automatically at the start of each positives run, from M2's saved top-100 lens readout at the
-  # positions the treatment edits (rules: src/jlens_spec/controls.py; settings: the M3 experiment
-  # files). No human approval step.
+  # Control tokens are NOT hand-picked and NOT listed here: a controls run (scripts/m3_controls.py,
+  # one per position set) picks them by rule from M2's saved top-100 lens readout at the positions
+  # the treatment edits (rules: src/jlens_spec/controls.py) and stops; the human reads the picks,
+  # extends this list if needed, commits, and runs the controls step again.
   # control_ineligible applies ONLY to the selection of CONTROL tokens. It has no effect on treatment
   # tokens, which come from `pairs` via pair_score. Its purpose: a control must be a non-label edit,
   # so no language-identity token may be chosen as a control -- neither these tokens nor any token
-  # whose text contains one of them (case-insensitive). Extend it by hand; the next positives run
-  # picks up the change.
-  control_ineligible:               # language-identity tokens, any script
+  # whose text contains one of them (case-insensitive substring; a few unrelated words also drop out,
+  # e.g. "comparison" contains "paris", "eyes" contains "yes" -- harmless, they only leave the pool).
+  # Generic words (language, word, answer, translation) stay eligible -- " translation" was removed
+  # from this list; what names a language or Spain/France does not (human, 2026-09-11, after the
+  # first real controls runs, controls_question_20260911-212357 / controls_message_20260911-212639).
+  control_ineligible:
+    # the two languages and their countries, in any script
     ["Spanish"," Spanish"," spanish","French"," French"," french","西班牙语","法语","西班牙","法国",
-     " español"," francés"," espagnol"," français"," langue"," idioma"," lengua"," bilingual"," translation"]
+     " español"," francés"," espagnol"," français"," langue"," idioma"," lengua"," bilingual",
+     "franc","franç","spain","españ","espagn","hispan","castellan","madrid","paris",
+     "马德里","巴黎","法兰西","法國",
+     # any OTHER language's name (another language is not "no language")
+     "english","portugu","german","deutsch","chinese","mandarin","japanese","korean","italian",
+     "russian","arabic","hindi","dutch",
+     "英语","英文","德语","德文","日语","日文","日本語","汉语","中文","韩语","韩文","한국어",
+     "俄语","意大利语","葡萄牙语","阿拉伯语",
+     # answer-like tokens beyond the exact answer tokens (.YesNo, YES, _yes)
+     "yes"]
 answers:
   # "yes"/"no" MUST stay quoted: YAML reads a bare yes / no key as true / false.
   "yes": ["Yes"]

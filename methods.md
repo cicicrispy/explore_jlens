@@ -607,6 +607,15 @@ All dates 2026-09-11 unless noted.
   from its low at 18–19, a CKA block boundary at 18), motor onset 56 (top-1 agreement jumps from
   0.04 to 0.27, kurtosis climbs to its peak at 58–59). workspace [18, 55], full [18, 62],
   early_late [[18, 33], [45, 55]] (two blocks with a gap, skipping the 34–44 block).
+- M2 (`loading_20260911-211140`): accuracy 16/16 on every question; treatment pair `zh` (西班牙语 /
+  法语, pair score 0.028 against 0.019 for plain). First real controls runs
+  (`controls_question_20260911-212357`, `controls_message_20260911-212639`) reviewed: picks included
+  Spanish/French identity (' francesa', ' François', ' France', 巴黎, ' Hispanic'), other languages'
+  names (' Portuguese', ' English', 德语, 日本語, 한국어) and '.YesNo'. The human's rule: generic
+  words (language, word, answer, translation — ' translation' taken off the blocklist) are fine as
+  long as they do not say which language; any other
+  language's name, anything about Spain/France/Spanish/French (Madrid, Paris, …) and Yes-like tokens
+  are excluded. `control_ineligible` extended accordingly (substrings); both controls runs repeated.
 - Figures: M3 summary and combined figures uploaded to the dataset, mask figures and M2 figures not;
   added the flip heatmap, the margin change and the M2 rank heatmaps; panel c kept exactly as
   specified.
