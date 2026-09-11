@@ -30,6 +30,15 @@ from the saved files only; the summary figures are uploaded with the run, the ma
     python scripts/m3_grid.py --experiment configs/experiments/m3_positives_question.yaml
     python scripts/m3_grid.py --experiment configs/experiments/m3_anomaly_question.yaml
     python scripts/m3_grid.py --experiment ... --fresh | --resume runs/M3/<run folder>
+    python scripts/m3_grid.py --experiment ... --store-dir <folder>   # Hub refuses writes: see below
+
+`--store-dir <folder>` writes the run to that folder on this machine instead of uploading it to the
+HF dataset (io.NoUploadStore) -- for when the Hub refuses writes (a quota or rate limit). Reads still
+fall back to the dataset, so the M1/M2/positives runs this one names still count as finished. While
+a run uses it, THAT FOLDER IS THE RUN'S ONLY BACKUP; upload the run folder to the dataset when the
+Hub lets you and the run is backed up the normal way. Resume keeps working: a prompt counts as done
+when its files are in the store, which is now that folder -- so a --store-dir run must be resumed
+with the same --store-dir, and a run started without the flag must be resumed without it.
 """
 from __future__ import annotations
 
@@ -204,13 +213,22 @@ def main() -> None:
     ap.add_argument("--resume", default=None, help="resume this unfinished run folder")
     ap.add_argument("--device", default="mps" if torch.backends.mps.is_available() else "cpu",
                     help="dry runs only: mps or cpu (a real run uses the GPU via device_map='auto')")
+    ap.add_argument("--store-dir", default=None,
+                    help="real runs only: write this run to this folder on this machine instead of uploading it to "
+                         "the HF dataset (reads still fall back to the dataset, so earlier runs still count as "
+                         "finished). Use it when the Hub refuses writes; the folder is then the run's only backup, "
+                         "so upload the run folder to the dataset when the Hub lets you.")
     args = ap.parse_args()
     git_commit = env.git_commit()  # the code this process loaded; every row of this launch carries it
 
     exp0 = pipeline.read_experiment(args.experiment)
-    dry, store, root = pipeline.is_dryrun(exp0), pipeline.store_for(exp0), pipeline.runs_root(exp0)
+    dry, root = pipeline.is_dryrun(exp0), pipeline.runs_root(exp0)
+    if dry and args.store_dir:
+        raise SystemExit("--store-dir is for real runs; a dry run already writes to the local store named in its "
+                         "experiment file")
+    store = pipeline.store_for(exp0, store_dir=args.store_dir)
     if not dry:
-        env.require_env("HF_TOKEN")
+        env.require_env("HF_TOKEN")  # reads still go to the dataset, --store-dir or not
     # Checks that need no model, before any run folder is created (repeated below on the run's own
     # settings copy, which is what a resumed run uses).
     _check_experiment(exp0, args.experiment, store)
@@ -390,7 +408,9 @@ def main() -> None:
         + ("; ".join(f"{w!r} in {', '.join(g)}" for w, g in never.items()) if never else "none"),
         f"- Background uploads: {uploader.n_uploads} ok, {uploader.n_failures} failed"
         + (f"; last error: {bg_error}" if bg_error else ""),
-        f"- Files downloaded from the store at the end (computed on another machine): {len(downloaded)}", "",
+        f"- Files downloaded from the store at the end (computed on another machine): {len(downloaded)}",
+        *([f"- NOT uploaded to the HF dataset: this run was written to {args.store_dir} (--store-dir), which is its "
+           "only backup until someone uploads the run folder to the dataset."] if args.store_dir else []), "",
         "## 5. Per-control flip rate and mean margin", "",
         "| kind | # | control | question | direction | flip rate | mean margin | n |", "|---|---|---|---|---|---|---|---|",
         *[f"| {r.kind} | {r.control_index} | {r.control!r} | {r.question_key} | {r.direction} | {r.flip_rate:.3f} | "

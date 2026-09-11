@@ -521,6 +521,7 @@ that. No hypothesis tests are run at this stage.
 | Extra figures | panel c, margin vs \|Δc\| | also flip heatmap, margin change, M2 rank heatmaps | presentation |
 | Question key | `content_probe` | `content` | naming |
 | Tests on the GPU machine | the full suite, plus GPU-marked tests | none (the suite runs on the Mac) | the suite uses the stand-in and a random lens, which the Mac covers; no GPU-marked tests exist; M1's validation is the GPU check |
+| Backup of a run | the HF dataset is the only backup, and a run is finished only when its `summary.md` is there | unchanged by default; `scripts/m3_grid.py --store-dir <folder>` writes a run to a folder on the machine instead, and that folder is then the run's store (reads still fall back to the dataset, so earlier runs still count as finished) | the Hub refused writes during the last M3 run (2026-09-11); the run is uploaded to the dataset afterwards and nothing inside it changes |
 | Lock files | `pip freeze` per platform, committed | written by `setup.sh`, kept on each machine, not committed; `nnsight`, `transformers`, `accelerate` pinned instead | an uncommitted file would mark every run's code version as modified |
 
 Two further operational choices: secrets are loaded only from Python (never by sourcing the secrets
@@ -637,6 +638,23 @@ All dates 2026-09-11 unless noted.
   about 0.5 log units somewhere in the vocabulary on the bf16 27B model (0/32 cell pairs within one
   16-bit step, against 32/32 in the Mac dry runs); the answer-set margins still agree to about 0.02
   and the flip counts are identical. Cause: bf16 rounding amplified through 38 clamped layers.
+- `positives_message_20260911-221446` (every token of the user message, report + hello), the main
+  test: the treatment flips 10/16 passages for *report* and 8/16 for *hello*, against 0/16 identity,
+  0/48 and 1/48 big non-label, 0/16 and 1/16 random direction, 7/96 and 20/96 label-to-present. The
+  flips are one-sided: every one of the 16 French-passage cells flips (mean margin +2.8 and +4.5),
+  2/16 Spanish ones do. Two label-to-present controls flip in *hello* m2i (' analyzing' 8/8,
+  'answer' 8/8). Machinery: 576/576 cells, no edit outside the planned positions, no planned entry
+  unchanged, identity identical across directions, control sizes within 1.00–1.04 of the treatment's.
+- `anomaly_question_20260911-222458` (question positions, anomaly + content): every box of the flip
+  heatmap is 0 — treatment and all controls, both questions — as the question-set positives run
+  predicted. For the *content* question neither treatment token is in the lens top-100 at the edited
+  positions, so the coverage rule set no bar for those controls (recorded in its summary section 4).
+- Hugging Face refused writes while the last M3 run (`anomaly_message`) was starting; the human
+  stopped it. Added `scripts/m3_grid.py --store-dir <folder>` (`io.NoUploadStore`): uploads go to a
+  folder on the machine, reads still fall back to the dataset so the M1/M2/positives runs this run
+  names still count as finished, and nothing is committed to the Hub. Chosen over a plain
+  `--no-upload` flag because resume counts a prompt as done only when its files are **in the store**,
+  which a local store keeps true. The run is uploaded to the dataset afterwards.
 - Figures: M3 summary and combined figures uploaded to the dataset, mask figures and M2 figures not;
   added the flip heatmap, the margin change and the M2 rank heatmaps; panel c kept exactly as
   specified.

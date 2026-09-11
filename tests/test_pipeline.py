@@ -35,6 +35,15 @@ def test_a_failed_positive_control_needs_the_humans_acceptance_of_that_exact_run
     assert "NOT passed" in line and "ACCEPTED" in line and "an effect, smaller than the paper's" in line
 
 
+def test_store_dir_sends_a_real_runs_uploads_to_a_folder_instead_of_the_hub(tmp_path):
+    dry_exp = {"dryrun": {"store": str(tmp_path / "dry")}}
+    assert isinstance(pipeline.store_for(dry_exp), io_mod.LocalStore)
+    assert isinstance(pipeline.store_for({}), io_mod.HFStore)
+    store = pipeline.store_for({}, store_dir=str(tmp_path / "backup"))
+    assert isinstance(store, io_mod.NoUploadStore)
+    assert store.local.root == tmp_path / "backup" and str(tmp_path / "backup") in store.name
+
+
 def test_real_runs_copy_the_acceptance_file_and_keep_the_bands_file_last():
     real = pipeline.settings_files({})
     assert real[-1] == "configs/bands.yaml" and pipeline.ACCEPTANCE_FILE in real

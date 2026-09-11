@@ -261,7 +261,19 @@ python scripts/m3_controls.py --experiment configs/experiments/m3_controls_quest
 python scripts/m3_grid.py --experiment configs/experiments/m3_positives_question.yaml
 # read runs/M3/positives_question_<time>/summary.md -- then, if you decide to continue:
 python scripts/m3_grid.py --experiment configs/experiments/m3_anomaly_question.yaml
+# if the Hub refuses writes (quota or rate limit), write the run to a folder instead:
+python scripts/m3_grid.py --experiment ... --store-dir ~/explore_jlens_store
 ```
+
+**`--store-dir <folder>` (real runs, `m3_grid.py` only).** The run's store becomes that folder on
+this machine: every upload is a file copy there, nothing is committed to the Hub, and `summary.md`
+landing there is what makes the run finished. Reads still fall back to the dataset, so the M1, M2 and
+positives runs the experiment file names still count as finished. **That folder is then the run's
+only backup** -- keep it, and upload the run folder to the dataset when the Hub lets you
+(`hf upload orbitsoferis/jlens-specificity runs/M3/<run folder> runs/M3/<run folder> --repo-type
+dataset`), after which the run is backed up the normal way and nothing inside it changes. Resume a
+`--store-dir` run **with the same `--store-dir`**: a prompt counts as done when its files are in the
+store, and that store is the folder.
 
 Fill `from_m2_run` and `m1_validate_run` (and `controls_run` in the positives files, `positives_run`
 in the anomaly files) with folder names first. **Hygiene invariant 7's "positive controls first; if

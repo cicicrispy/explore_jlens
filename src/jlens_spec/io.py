@@ -260,6 +260,44 @@ class LocalStore:
         return Path(path)
 
 
+class NoUploadStore:
+    """A real run whose store is a folder on this machine: every upload goes there (LocalStore) and
+    nothing is ever written to the Hub. Reads look in that folder first and fall back to the HF
+    dataset, so the runs this one depends on (M1, M2, the positives run) still count as finished from
+    their summary.md in the dataset -- those are GETs, never commits.
+
+    Used by `--store-dir` when the Hub refuses writes (a quota or rate limit). DEPARTURE from "the HF
+    dataset is the only backup" (methods.md): while a run's store is this folder, the folder IS the
+    backup, so it must be on disk you keep. Upload the run folder to the dataset afterwards and the
+    run is backed up the normal way; nothing inside it has to change."""
+
+    def __init__(self, root):
+        self.local = LocalStore(root)
+        self.hf = HFStore()
+        self.name = f"local folder {Path(root)} (no uploads; reads fall back to the {HFStore.name})"
+
+    def folder_url(self, path) -> str:
+        return self.local.folder_url(path)
+
+    def upload_path(self, path, exclude_figures: bool = False) -> str:
+        return self.local.upload_path(path, exclude_figures=exclude_figures)
+
+    def upload_files(self, run_dir, rel_files) -> str:
+        return self.local.upload_files(run_dir, rel_files)
+
+    def exists(self, path) -> bool:
+        return self.local.exists(path) or self.hf.exists(path)
+
+    def list_files(self, prefix) -> set[str]:
+        return self.local.list_files(prefix) | self.hf.list_files(prefix)
+
+    def list_dirs(self, prefix) -> set[str]:
+        return self.local.list_dirs(prefix) | self.hf.list_dirs(prefix)
+
+    def download(self, path) -> Path:
+        return (self.local if self.local.exists(path) else self.hf).download(path)
+
+
 def finalize_run(run_dir, summary_lines: list[str], exclude_figures: bool = True, store=None,
                  figures_to_upload=()) -> str | None:
     """End of every milestone script. **A run is finished if and only if its summary.md is in the

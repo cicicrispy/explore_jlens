@@ -232,6 +232,59 @@ def test_local_store_mirrors_repo_relative_paths(tmp_path, monkeypatch):
     assert store.list_files("runs/M9") == set() and store.list_dirs("runs/M9") == set()
 
 
+def _no_upload_store(root, hub):
+    """A NoUploadStore whose Hub half is a second local folder, so the test touches no network."""
+    store = io_mod.NoUploadStore(root)
+    store.hf = io_mod.LocalStore(hub)
+    return store
+
+
+def test_no_upload_store_writes_only_to_its_folder(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    run = Path("runs/M3/anomaly_message_1")
+    run.mkdir(parents=True)
+    (run / "data.parquet").write_text("d")
+    store = _no_upload_store("store", "hub")
+
+    store.upload_files(run, ["data.parquet"])
+    assert io_mod.finalize_run(run, ["# s"], store=store) is not None
+    assert store.local.list_files(run) == {f"{run.as_posix()}/data.parquet", f"{run.as_posix()}/summary.md"}
+    assert store.hf.list_files("runs") == set()      # nothing ever reaches the Hub
+
+
+def test_no_upload_store_reads_fall_back_to_the_dataset(tmp_path, monkeypatch):
+    """Why: the runs an M3 run names (M1, M2, the positives run) are finished in the dataset, and
+    runs.is_finished asks the store. A run written to a local folder must still see them."""
+    monkeypatch.chdir(tmp_path)
+    earlier = Path("runs/M3/positives_message_1")
+    earlier.mkdir(parents=True)
+    (earlier / "summary.md").write_text("# earlier")
+    hub = io_mod.LocalStore("hub")
+    hub.upload_path(earlier)
+    (earlier / "summary.md").unlink()                # only the dataset has it now
+    store = _no_upload_store("store", "hub")
+
+    assert store.exists(earlier / "summary.md")      # -> runs.is_finished(earlier) is True
+    assert earlier.as_posix() + "/summary.md" in store.list_files("runs/M3")
+    assert store.list_dirs("runs/M3") == {"positives_message_1"}
+    assert store.download(earlier / "summary.md").read_text() == "# earlier"
+
+
+def test_no_upload_store_prefers_its_own_folder_over_the_dataset(tmp_path, monkeypatch):
+    """A resumed --store-dir run must count its own files, not an older copy in the dataset."""
+    monkeypatch.chdir(tmp_path)
+    run = Path("runs/M3/anomaly_message_1")
+    run.mkdir(parents=True)
+    (run / "fr_01_anomaly.parquet").write_text("new")
+    store = _no_upload_store("store", "hub")
+    store.upload_files(run, ["fr_01_anomaly.parquet"])
+    (run / "fr_01_anomaly.parquet").write_text("old")
+    store.hf.upload_files(run, ["fr_01_anomaly.parquet"])
+    (run / "fr_01_anomaly.parquet").unlink()
+
+    assert store.download(run / "fr_01_anomaly.parquet").read_text() == "new"
+
+
 def test_finalize_run_never_uploads_figures_by_default(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     run = Path("runs/M2/loading_1")

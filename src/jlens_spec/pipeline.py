@@ -48,8 +48,13 @@ def runs_root(exp: dict) -> Path:
     return Path("runs/dryrun") if is_dryrun(exp) else Path("runs")
 
 
-def store_for(exp: dict):
-    return io_mod.LocalStore(exp["dryrun"]["store"]) if is_dryrun(exp) else io_mod.HFStore()
+def store_for(exp: dict, store_dir: str | None = None):
+    """The run's store. Dry run: the local stand-in named in the experiment file. Real run: the HF
+    dataset -- unless `store_dir` is given (m3_grid.py's --store-dir), which writes the run to that
+    folder instead and never commits to the Hub (io.NoUploadStore)."""
+    if is_dryrun(exp):
+        return io_mod.LocalStore(exp["dryrun"]["store"])
+    return io_mod.NoUploadStore(store_dir) if store_dir else io_mod.HFStore()
 
 
 def environment(exp: dict) -> str:
