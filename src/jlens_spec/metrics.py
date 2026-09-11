@@ -101,3 +101,38 @@ def topk_tokens(logits: torch.Tensor, tokenizer, k: int) -> list[dict]:
     vals, ids = torch.topk(logits, min(k, logits.shape[-1]))
     return [{"token_id": int(i), "token": tokenizer.decode([int(i)]), "logit": float(v),
              "logprob": float(logprobs[i])} for v, i in zip(vals, ids)]
+
+
+def single_token_table(tokenizer, tokens_raw: dict):
+    """Which configs/tokens.yaml strings are a single token under `tokenizer`. Returns (table rows,
+    names of pairs dropped because a member is not single-token, {kept pair name: [a, b]})."""
+    table = []
+
+    def check(label, s):
+        ids = tokenizer.encode(s, add_special_tokens=False)
+        table.append({"label": label, "text": s, "n_tokens": len(ids), "single_token": len(ids) == 1})
+        return len(ids) == 1
+
+    for lang, forms in tokens_raw["language_tokens"].items():
+        for f in forms:
+            check(f"language_tokens.{lang}", f)
+
+    dropped_pairs, kept_pairs = [], {}
+    for name, (a, b) in tokens_raw["pairs"].items():
+        ok_a = check(f"pairs.{name}[0]", a)
+        ok_b = check(f"pairs.{name}[1]", b)
+        if ok_a and ok_b:
+            kept_pairs[name] = [a, b]
+        else:
+            dropped_pairs.append(name)
+
+    for label, forms in tokens_raw["answers"].items():
+        if isinstance(forms, dict):
+            for lang, fs in forms.items():
+                for f in fs:
+                    check(f"answers.{label}.{lang}", f)
+        else:
+            for f in forms:
+                check(f"answers.{label}", f)
+
+    return table, dropped_pairs, kept_pairs

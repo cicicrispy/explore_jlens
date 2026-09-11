@@ -129,6 +129,31 @@ def build_prompt(stimulus: dict, question_key: str, fmt: dict) -> Prompt:
     )
 
 
+def region_check(prompt: Prompt) -> list[dict]:
+    """For each region -- the question, then every sentence -- whether the tokens labelled with that
+    region's class (and overlapping it) spell EXACTLY the region's text: nothing stripped, no extra
+    characters. A token that also carries characters from outside its region (a separator newline,
+    the space before a sentence, template text) is edited along with the region, so every such
+    token must be known. One row per region; `match` is False where they differ."""
+    regions = [("question", *prompt.spans["question"])] + [
+        (s["role"], s["char_start"], s["char_end"]) for s in prompt.spans["sentences"]]
+    rows = []
+    for cls, a, b in regions:
+        toks = [(s, e) for i, (s, e) in enumerate(prompt.offsets)
+                if prompt.classes[i] == cls and s < b and e > a]
+        got = "".join(prompt.text[s:e] for s, e in toks)
+        want = prompt.text[a:b]
+        rows.append({
+            "stimulus_id": prompt.stimulus_id, "question_key": prompt.question_key,
+            "region": cls, "char_start": a, "char_end": b, "match": got == want,
+            "n_tokens": len(toks),
+            "first_token": prompt.text[slice(*toks[0])] if toks else None,
+            "last_token": prompt.text[slice(*toks[-1])] if toks else None,
+            "tokens_text": got, "region_text": want,
+        })
+    return rows
+
+
 def mask(prompt: Prompt, classes: set[PositionClass], skip_first: int = 4) -> torch.Tensor:
     """Boolean mask over positions: True where prompt.classes[i] in `classes`, positions < skip_first
     forced False (skips the first ~4 high-norm positions per the hygiene invariant)."""

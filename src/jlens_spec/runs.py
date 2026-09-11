@@ -64,9 +64,11 @@ class Run:
         return h.hexdigest()
 
 
-def start_run(milestone: str, experiment_path, settings_files: list, root=RUNS_ROOT) -> Run:
+def start_run(milestone: str, experiment_path, settings_files: list, root=RUNS_ROOT,
+              name_suffix: str | None = None) -> Run:
     """Create a new run folder and copy the experiment file plus `settings_files` (e.g.
-    "configs/model.yaml", "stimuli/stimuli.json") into its settings/ folder."""
+    "configs/model.yaml", "stimuli/stimuli.json") into its settings/ folder. The folder is named
+    <experiment name>[_<name_suffix>]_<UTC start time>, e.g. download_Qwen3.6-27B_20260912-031000."""
     experiment_path = Path(experiment_path)
     with open(experiment_path) as f:
         exp = yaml.safe_load(f)
@@ -74,11 +76,12 @@ def start_run(milestone: str, experiment_path, settings_files: list, root=RUNS_R
         raise ValueError(f"{experiment_path} is for milestone {exp.get('milestone')!r}, not {milestone!r}")
 
     stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
-    run_id = f"{exp['name']}_{stamp}"
+    prefix = f"{exp['name']}_{name_suffix}" if name_suffix else exp["name"]
+    run_id = f"{prefix}_{stamp}"
     run_dir = Path(root) / milestone / run_id
     n = 2
     while run_dir.exists():  # two runs started within the same second
-        run_id = f"{exp['name']}_{stamp}-{n}"
+        run_id = f"{prefix}_{stamp}-{n}"
         run_dir = Path(root) / milestone / run_id
         n += 1
     settings = run_dir / "settings"

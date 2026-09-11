@@ -103,18 +103,15 @@ def test_region_tokens_spell_their_text_exactly(standin_model):
     for stimulus in stim["passages"]:
         for qkey in stim["questions"]:
             p = prompts_mod.build_prompt(stimulus, qkey, fmt)
-            regions = [("question", *p.spans["question"])] + [
-                (s["role"], s["char_start"], s["char_end"]) for s in p.spans["sentences"]]
-            for cls, a, b in regions:
-                toks = [(s, e) for i, (s, e) in enumerate(p.offsets)
-                        if p.classes[i] == cls and s < b and e > a]
-                got = "".join(p.text[s:e] for s, e in toks)
-                want = p.text[a:b]
-                if got != want:
+            for r in prompts_mod.region_check(p):
+                if not r["match"]:
                     problems.append(
-                        f"{stimulus['id']}/{qkey} {cls} chars [{a}:{b}]: first token "
-                        f"{p.text[slice(*toks[0])]!r} (region starts {want[:8]!r}), last token "
-                        f"{p.text[slice(*toks[-1])]!r} (region ends {want[-8:]!r})"
-                        if toks else f"{stimulus['id']}/{qkey} {cls} chars [{a}:{b}]: no tokens")
+                        f"{r['stimulus_id']}/{r['question_key']} {r['region']} chars "
+                        f"[{r['char_start']}:{r['char_end']}]: first token {r['first_token']!r} "
+                        f"(region starts {r['region_text'][:8]!r}), last token {r['last_token']!r} "
+                        f"(region ends {r['region_text'][-8:]!r})"
+                        if r["n_tokens"] else
+                        f"{r['stimulus_id']}/{r['question_key']} {r['region']} chars "
+                        f"[{r['char_start']}:{r['char_end']}]: no tokens")
     assert not problems, f"{len(problems)} region(s) whose tokens don't spell exactly their text:\n" + \
         "\n".join(problems)

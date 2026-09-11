@@ -181,10 +181,16 @@ _KIND_FUNCS = {
 }
 
 
-def apply(model, lens, prompt, kind: str, layers: list[int], mask, **kw):
+def apply(model, lens, prompt, kind: str, layers: list[int], mask, return_changes: bool = False, **kw):
     """Register `kind` on layer_output(model, l) for each l in `layers`, ascending, inside one
     trace (each layer sees the already-edited stream -- clamped). Returns
-    (logits_at_metric: Tensor[vocab], logs: list[InterventionLog]).
+    (logits_at_metric: Tensor[vocab], logs: list[InterventionLog]), plus -- if `return_changes` --
+    `changes`: {layer: [float per position]}, the size ||h_new - h|| of what was actually written at
+    EVERY position (not only the planned ones; see `edit_problems`). The logs only describe the
+    planned positions, so they cannot show an edit that landed elsewhere; `changes` can.
+
+    Always asserts that the sequence inside the trace is exactly as long as `mask` (i.e. the prompt
+    the mask was built on) -- a shifted sequence would put every edit on the wrong token.
 
     kw by kind:
       swap:             s_token, t_token, alpha=1.0  (or pairs=[(s, t), ...] for several swaps)
@@ -204,10 +210,15 @@ def apply(model, lens, prompt, kind: str, layers: list[int], mask, **kw):
         "and the final layer must never be written to"
     )
 
+    changes: dict[int, list[float]] = {}
     with model.trace(prompt.input_ids):
         for l in sorted(layers):
             env = model_mod.layer_output(model, l)
             h = env.float()
+            assert h.shape[1] == len(mask), (
+                f"the sequence in the trace has {h.shape[1]} positions but the mask has {len(mask)} "
+                "-- edits would land on the wrong tokens"
+            )
 
             if kind == "swap":
                 # `pairs=[(s, t), ...]` applies several 2-D swaps in sequence at each layer (e.g. the
@@ -237,9 +248,33 @@ def apply(model, lens, prompt, kind: str, layers: list[int], mask, **kw):
             else:  # identity
                 h_new, logs = identity(h, mask, layer=l)
 
+            if return_changes:
+                changes[l] = (h_new - h)[0].norm(dim=-1).tolist()
             model_mod.layer_output(model, l)[:] = h_new.to(env.dtype)
             all_logs.extend(logs)
 
         logits = model.output.logits[0, prompt.metric_pos].float().save()
 
+    if return_changes:
+        return logits, all_logs, changes
     return logits, all_logs
+
+
+def edit_problems(changes: dict, mask, kind: str) -> tuple[list, list]:
+    """Compare where the stream actually changed (`changes` from `apply(..., return_changes=True)`)
+    with where it was planned to (`mask`). Returns (outside, unchanged):
+      outside   -- [(layer, pos, size)] positions NOT in the mask whose value changed at all. Any
+                   entry means the edit spilled onto unplanned tokens: callers must treat this as a
+                   hard failure.
+      unchanged -- [(layer, pos)] planned positions that did not change. Expected (and not
+                   reported) for `identity`, which edits nothing by design; for other kinds it is
+                   reported, not failed (e.g. a swap whose two coordinates happen to be equal)."""
+    planned = [bool(m) for m in mask]
+    outside, unchanged = [], []
+    for layer, sizes in sorted(changes.items()):
+        for pos, size in enumerate(sizes):
+            if not planned[pos] and size != 0.0:  # exact: unplanned positions get delta * 0
+                outside.append((layer, pos, size))
+            elif planned[pos] and size == 0.0 and kind != "identity":
+                unchanged.append((layer, pos))
+    return outside, unchanged

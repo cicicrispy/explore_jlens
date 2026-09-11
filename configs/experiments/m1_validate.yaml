@@ -1,0 +1,53 @@
+# M1 lens validation (Phase B, GPU): scripts/m1_validate.py. Hand-written. Copied into the run
+# folder's settings/ when a run starts; the run reads that copy. Checks follow the spec's M1 steps 1-4
+# (step 5, the real-tokenizer single-token table, runs locally in scripts/m1_tokens.py).
+#
+#   python scripts/m1_validate.py                      # uses this file
+#   python scripts/m1_validate.py --experiment <file>  # any other M1 validate experiment file
+
+name: validate       # run folders: runs/M1/validate_<UTC start time>/
+milestone: M1
+
+# REQUIRED before running: the folder name of the scripts/download.py run on this machine, e.g.
+# download_Qwen3.6-27B_20260912-031000 (i.e. runs/M1/<this>/). Its CREDIT.md goes into the summary;
+# its lens_resolved.yaml gives the lens version if configs/lens.yaml's revision_sha is still empty.
+download_run: null
+
+save_topk: 100       # how many top tokens every check SAVES; each check's own k is applied afterwards
+
+# Step 1: lens readout at the final layer vs the model's actual output logits.
+check1_final_layer_agreement:
+  n_prompts: 5       # the first 5 of the 64 prompts (stimulus order x question order)
+  n_positions: 50    # random positions, spread evenly over those prompts
+  seed: 0
+  overlap_k: 10      # report the top-10 overlap
+
+# Step 2: readout reproduction at the matrix positions of one prompt.
+check2_readout:
+  stimulus: sp_01
+  question: report
+  n_layers: 8        # evenly spaced over the lens layers
+  hit_k: 3           # "any es variant should be top-3 at mid layers"
+
+# Step 3: the causal positive control, EXACTLY as in the paper (transformer-circuits.pub/2026/workspace):
+# the raw prompt below, no chat template, swap at EVERY token position. Swapping at every position is a
+# deliberate departure from hygiene invariant 3 (skip the first ~4 positions), for this control only.
+check3_positive_control:
+  prompt: '"小"的反义词是"'   # 'The antonym of "small" is "' -- the model should continue with 大
+  expect_clean: "大"
+  expect_swapped: "长"
+  pairs:                     # each: the first single-token variant of source/target is used
+    - source: [" big", "big"]
+      target: [" long", "long"]
+    - source: [" bigger", "bigger"]
+      target: [" longer", "longer"]
+  positions: all
+  layer_range: [0.25, 0.75]  # lens layers from 25% up to (not including) 75% of the model's depth
+  alphas: [1.0, 2.0]         # 1.0 is the paper's swap; 2.0 runs only if 1.0 fails (spec)
+
+# Step 4: band signatures (the human reads the figure and fills configs/bands.yaml).
+check4_band_signatures:
+  cka_n_tokens: 5000
+  cka_seed: 0
+  agreement_k: 5                    # agreement_top1 is always computed; plus agreement_top<k>
+  motor_onset_mid_range: [0.25, 0.60]

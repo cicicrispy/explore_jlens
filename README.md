@@ -73,8 +73,8 @@ that run's `settings/` folder. The run then reads its settings **only from that 
 the edit applies to the next new run. Code is not copied: every saved row records the git commit
 that produced it. `config_hash` in the manifest and in the rows is a hash of the `settings/` folder.
 
-Every saved row also carries the run's `run_id`. **Currently only M0 uses run folders**; M1-M3
-still write to `runs/<M>/` until they are converted (next stages of work).
+Every saved row also carries the run's `run_id`. **Currently M0 and M1 use run folders**; M2 and
+M3 still write to `runs/<M>/` until they are converted (next stage of work).
 
 **Commit before running a milestone.** Records store the git commit; if code or configs differ
 from it, the hash is suffixed `-dirty`.
@@ -102,25 +102,45 @@ At the end the run folder is uploaded to the `orbitsoferis/jlens-specificity` HF
 `HF_TOKEN`) -- **without `figures/`**, since every M0 figure can be redrawn from `masks.parquet` --
 and then `summary.md` is written and uploaded last (see "When is a run finished?" above).
 
-## M1 (Phase B, GPU box -- only after M0 sign-off)
+## M1 (lens validation -- only after M0 sign-off)
 
-```bash
-bash setup.sh                 # on the GPU box; runs scripts/download.py
-# copy revision_sha from runs/M1/lens_resolved.yaml into configs/lens.yaml
-python scripts/m1_validate.py
-```
+M1 has three kinds of run, all under `runs/M1/`, each in its own folder and uploaded to HF:
 
-`scripts/download.py` fetches `Qwen/Qwen3.6-27B` and the lens, and writes the resolved lens sha,
-covered layers, stored dtype, coverage ratio and `CREDIT.md` to `runs/M1/`. The model is a
-vision-language checkpoint; `model.decoder()` locates its text decoder, and only text is fed in.
-The antonym positive-control prompt in `scripts/m1_validate.py` (`ANTONYM_USER_TEXT`) is a
-placeholder until replaced with the paper's exact prompt.
+| Step | Where | Command | Run folder |
+|---|---|---|---|
+| 1. token checks | **your Mac** (tokenizer only, no weights) | `python scripts/m1_tokens.py` | `runs/M1/tokens_<time>/` |
+| 2. download | GPU box (`setup.sh` runs it) | `python scripts/download.py` | `runs/M1/download_<model>_<time>/` |
+| 3. validation | GPU box | `python scripts/m1_validate.py` | `runs/M1/validate_<time>/` |
 
-Runs lens validation: final-layer agreement, readout reproduction on `sp_01`, the Chinese-antonym
-causal positive control (stops before M2 if it fails at both alpha=1 and alpha=2), and band
-signatures (CKA + next-token agreement + kurtosis by layer) into
-`runs/M1/band_signatures.parquet` and `runs/M1/figures/band_signatures.png`. **You** then fill `configs/bands.yaml`'s `workspace` (and
-`full`/`early_late`, used later) by reading that figure -- no code does this automatically.
+**1. Token checks (`configs/experiments/m1_tokens.yaml`).** Loads only the real model's tokenizer and
+chat template and records: the region check for all 64 prompts (`region_check.parquet` -- the check
+the stand-in test runs, see "Known open items"), the real template string and its diff against the
+M0 run named in the experiment file, the single-token table for `configs/tokens.yaml` (spec M1 step 5),
+and how the positive-control prompt splits into tokens. Run it before renting the GPU, so prompts or
+stimuli can be adjusted first.
+
+**2. Download (`configs/experiments/m1_download.yaml`).** Fetches `Qwen/Qwen3.6-27B` (into `HF_HOME`,
+not loaded) and the lens, resolves the lens repo's current version, and records the version, covered
+layers, stored dtype, one matrix's shape, coverage ratio and `CREDIT.md` in the run folder
+(`lens_resolved.yaml`). Stops if the lens size doesn't match the model's hidden size. Then, by hand:
+copy `revision_sha` into `configs/lens.yaml`, and put the run's folder name into
+`configs/experiments/m1_validate.yaml`'s `download_run`. The model is a vision-language checkpoint;
+`model.decoder()` locates its text decoder, and only text is fed in.
+
+**3. Validation (`configs/experiments/m1_validate.yaml`).** Spec M1 steps 1-4, each saving the top-100
+tokens (check 4: the rank of the model's real next token) so the k each check is judged at is applied
+afterwards from the saved files (`src/jlens_spec/m1_checks.py`):
+- final-layer agreement (lens readout vs the model's actual logits);
+- readout reproduction on `sp_01` (figure `readout_top1_sp01`);
+- **the Chinese-antonym causal positive control, exactly as in the paper**: the raw prompt
+  `"小"的反义词是"` (no chat template), ` big`->` long` and ` bigger`->` longer` swapped at **every** token
+  position across layers 25-75% of depth; 长 should become the top-1 answer instead of 大. Alpha 2 runs
+  only if alpha 1 fails; if both fail, M1 stops (do not run M2). Where the stream actually changed is
+  measured at every position, and any change outside the planned positions stops the run; the mask
+  figures (`masks/check3_*`) are drawn from those measured changes.
+- band signatures (CKA + next-token agreement + kurtosis by layer) into `band_signatures.parquet` and
+  `figures/png/band_signatures.png`. **You** then fill `configs/bands.yaml`'s `workspace` (and
+  `full`/`early_late`, used later) by reading that figure -- no code does this automatically.
 
 ## M2 (Phase B -- only after `configs/bands.yaml.workspace` is filled)
 
@@ -262,10 +282,11 @@ effect" -- and `panel_c` leaves those out of the flip rates.
   update the sentence spans in `stimuli/stimuli.json` so sentences 2-5 start at that space --
   exactly one space, never two, and no change to the text itself -- and then make the test expect
   exactly those characters.
-- **Antonym prompt** (`ANTONYM_USER_TEXT` in `scripts/m1_validate.py`) is a placeholder; replace it
-  with the paper's exact prompt if available.
-- **Lens file layout** is parsed heuristically (`lens.load_lens`); `runs/M1/lens_resolved.yaml`
-  shows what was found. Also confirm lens keys are block indices (matching `decoder.layers[l]`),
+- **Antonym control departs from invariant 3 on purpose.** To replicate the paper exactly, the
+  positive control swaps at every token position, including the first ones that invariant 3 says to
+  skip; this applies to that one control only (`configs/experiments/m1_validate.yaml`).
+- **Lens file layout** is parsed heuristically (`lens.load_lens`); the download run's
+  `lens_resolved.yaml` shows what was found. Also confirm lens keys are block indices (matching `decoder.layers[l]`),
   not hidden_states indices -- an off-by-one there would be silent.
 - **`content_probe` -> `content`**: the spec's module contracts (`metrics.question_margin`, M2's
   accuracy table) mention `content_probe`, but `stimuli/stimuli.json`'s `questions` key is

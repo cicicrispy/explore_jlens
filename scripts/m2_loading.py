@@ -59,7 +59,7 @@ def main() -> None:
 
     model = model_mod.load_model(model_cfg, standin=False)
     assert lens_cfg.get("revision_sha"), (
-        "configs/lens.yaml revision_sha is null -- copy it from runs/M1/lens_resolved.yaml (M1 step 0)"
+        "configs/lens.yaml revision_sha is null -- copy it from the lens_resolved.yaml of your runs/M1/download_* run (M1 step 0)"
     )
     lens = lens_mod.load_lens(lens_cfg, device=env.get_device())
     tokenizer = model.tokenizer

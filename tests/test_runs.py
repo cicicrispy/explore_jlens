@@ -78,3 +78,9 @@ def test_two_settings_files_with_the_same_name_are_rejected(tmp_path):
     (other / "model.yaml").write_text("x: 1")
     with pytest.raises(ValueError, match="both named 'model.yaml'"):
         runs.start_run("M0", exp, [*files, other / "model.yaml"], root=tmp_path / "runs")
+
+
+def test_name_suffix_goes_between_name_and_time(tmp_path):
+    exp, files = _setup(tmp_path)
+    run = runs.start_run("M0", exp, files, root=tmp_path / "runs", name_suffix="Qwen3.6-27B")
+    assert re.fullmatch(r"smoke_Qwen3\.6-27B_\d{8}-\d{6}", run.run_id)

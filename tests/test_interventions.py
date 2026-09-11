@@ -181,6 +181,35 @@ def test_apply_edits_actually_propagate(standin_model, random_lens):
     assert not torch.allclose(logits.cpu(), clean.cpu(), atol=1e-2)
 
 
+def test_apply_measures_where_the_stream_actually_changed(standin_model, random_lens):
+    """changes = the size of what was written at EVERY position: exactly zero outside the mask,
+    non-zero at every planned position."""
+    p, clean, mask, layers = _trace_setup(standin_model, random_lens)
+    big = {l: torch.full((len(p.input_ids),), 5.0) for l in layers}
+    _, _, changes = iv.apply(standin_model, random_lens, p, "random_direction", layers, mask,
+                             return_changes=True, target_norms=big, seed=0)
+    assert set(changes) == set(layers) and all(len(v) == len(mask) for v in changes.values())
+    assert iv.edit_problems(changes, mask, "random_direction") == ([], [])
+    for sizes in changes.values():
+        assert all(sz == 0.0 for sz, m in zip(sizes, mask) if not m)
+        assert all(sz > 0.0 for sz, m in zip(sizes, mask) if m)
+
+
+def test_edit_problems_reports_spills_and_unchanged_positions():
+    mask = torch.tensor([False, True, True])
+    changes = {3: [0.0, 1.0, 0.0], 4: [0.1, 2.0, 5e-8]}
+    outside, unchanged = iv.edit_problems(changes, mask, "swap")
+    assert outside == [(4, 0, 0.1)]          # changed although not planned -> hard failure for callers
+    assert unchanged == [(3, 2)]             # planned but unchanged -> reported
+    assert iv.edit_problems({3: [0.0, 0.0, 0.0]}, mask, "identity") == ([], [])  # identity edits nothing
+
+
+def test_apply_refuses_a_mask_that_does_not_match_the_sequence(standin_model, random_lens):
+    p, clean, mask, layers = _trace_setup(standin_model, random_lens)
+    with pytest.raises(Exception, match="positions but the mask has"):
+        iv.apply(standin_model, random_lens, p, "identity", layers, mask[:-1])
+
+
 def test_prompts_are_independent_forward_passes(standin_model):
     """Every prompt is its own single forward pass -- no chat history, no KV cache carried between
     traces. Running prompt B right after prompt A must give exactly what B gives on its own."""

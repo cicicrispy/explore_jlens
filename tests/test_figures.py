@@ -37,9 +37,11 @@ def test_m0_masks_from_parquet(tmp_path):
 def test_m1_from_parquet(tmp_path):
     layers = [3, 7, 11]
     pd.DataFrame([{"stimulus_id": "sp_01", "question_key": "report", "pos": pos, "layer": l,
-                   "top1_id": 1, "top1_text": " Spanish", "top5_ids": [1, 2, 3, 4, 5],
-                   "top5_text": ["a", "b", "c", "d", "e"]}
-                  for pos in (10, 11) for l in layers]).to_parquet(tmp_path / "readout_top1_sp01.parquet")
+                   "topk_ids": [1, 2, 3], "topk_text": [" Spanish", "a", ""], "topk_logits": [3.0, 2.0, 1.0]}
+                  for pos in (10, 11) for l in layers]).to_parquet(tmp_path / "check2_readout.parquet")
+    pd.DataFrame([{"stimulus_id": "antonym", "question_key": "swap_alpha1", "pos": i, "token_id": 100 + i,
+                   "token_text": t, "class": "prompt", "edited": True, "is_metric_pos": i == 3}
+                  for i, t in enumerate(['"', '小', '"的', '反义词是"'])]).to_parquet(tmp_path / "check3_masks.parquet")
     pd.DataFrame([{"layer_a": a, "layer_b": b, "cka": 1.0 if a == b else 0.5}
                   for a in layers for b in layers]).to_parquet(tmp_path / "cka.parquet")
     pd.DataFrame({"layer": layers, "cka_onset_score": [0.1, 0.2, float("nan")],
@@ -48,8 +50,9 @@ def test_m1_from_parquet(tmp_path):
     (tmp_path / "figure_params.json").write_text(json.dumps({"motor_onset": 11}))
 
     written = figures.make_figures(tmp_path, formats=("pdf",), milestone="M1")
-    assert _files(written) == ["band_signatures.pdf", "cka_heatmap.pdf", "readout_top1_sp01.pdf"]
-    assert all(p.parent == tmp_path / "figures" / "pdf" for p in written)
+    assert _files(written) == ["band_signatures.pdf", "check3_swap_alpha1.pdf", "cka_heatmap.pdf",
+                               "readout_top1_sp01.pdf"]
+    assert tmp_path / "figures" / "pdf" / "masks" / "check3_swap_alpha1.pdf" in written
 
 
 def test_m2_from_parquet(tmp_path):

@@ -34,39 +34,6 @@ SETTINGS_FILES = ["configs/model.yaml", "configs/tokens.yaml", "configs/prompt_f
                   "stimuli/stimuli.json"]
 
 
-def _single_token_table(tokenizer, tokens_raw: dict):
-    table = []
-
-    def check(label, s):
-        ids = tokenizer.encode(s, add_special_tokens=False)
-        table.append({"label": label, "text": s, "n_tokens": len(ids), "single_token": len(ids) == 1})
-        return len(ids) == 1
-
-    for lang, forms in tokens_raw["language_tokens"].items():
-        for f in forms:
-            check(f"language_tokens.{lang}", f)
-
-    dropped_pairs, kept_pairs = [], {}
-    for name, (a, b) in tokens_raw["pairs"].items():
-        ok_a = check(f"pairs.{name}[0]", a)
-        ok_b = check(f"pairs.{name}[1]", b)
-        if ok_a and ok_b:
-            kept_pairs[name] = [a, b]
-        else:
-            dropped_pairs.append(name)
-
-    for label, forms in tokens_raw["answers"].items():
-        if isinstance(forms, dict):
-            for lang, fs in forms.items():
-                for f in fs:
-                    check(f"answers.{label}.{lang}", f)
-        else:
-            for f in forms:
-                check(f"answers.{label}", f)
-
-    return table, dropped_pairs, kept_pairs
-
-
 def _step(n: int, msg: str) -> None:
     print(f"[{n}/5] {msg}", flush=True)
 
@@ -120,7 +87,7 @@ def main() -> None:
     (run.dir / "template_string.txt").write_text(example_prompt.text)
 
     _step(3, "Single-token check on the stand-in tokenizer ...")
-    table, dropped_pairs, kept_pairs = _single_token_table(tokenizer, tokens_raw)
+    table, dropped_pairs, kept_pairs = metrics.single_token_table(tokenizer, tokens_raw)
     with open(run.dir / "single_token_check.yaml", "w") as f:
         yaml.safe_dump({"tokenizer": model_cfg["standin_hf_id"], "table": table,
                         "pairs_kept": kept_pairs, "pairs_dropped": dropped_pairs},

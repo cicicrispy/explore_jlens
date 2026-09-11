@@ -1,0 +1,14 @@
+# M1 token checks (runs LOCALLY on the Mac -- the real model's tokenizer and chat template only, no
+# weights, no GPU): scripts/m1_tokens.py. Hand-written. Copied into the run folder's settings/.
+#
+#   python scripts/m1_tokens.py
+
+name: tokens         # run folders: runs/M1/tokens_<UTC start time>/
+milestone: M1
+
+# The M0 run whose (stand-in) template string the real template is compared against.
+m0_run: smoke_20260911-043447
+
+# The positive-control prompt and token pairs are read from this experiment file (one source of
+# truth); it is copied into this run's settings/ as well.
+validate_experiment: configs/experiments/m1_validate.yaml

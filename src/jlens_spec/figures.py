@@ -12,10 +12,13 @@ each format gets its own folder.
 
 Per-milestone inputs (all inside the run folder):
     M0: masks.parquet                        -> masks/<stimulus>_<question>
-    M1: readout_top1_sp01.parquet            -> readout_top1_sp01
+    M1: check2_readout.parquet               -> readout_top1_<stimulus>
+        check3_masks.parquet                 -> masks/check3_<condition>  (positive control; the
+                                                red outline = where the stream ACTUALLY changed)
         cka.parquet                          -> cka_heatmap
         band_signatures.parquet
           + figure_params.json[motor_onset]  -> band_signatures
+        (M1's tokens_* and download_* runs have no figures.)
     M2: loadings.parquet
           + figure_params.json[band, loading_heatmaps]
                                              -> loading_heatmap_<stimulus>, loading_summary_bars
@@ -56,6 +59,7 @@ CLASS_COLORS = {
     "question": "#7fb3ff",
     "matrix": "#7fdc7f",
     "intrusion": "#ffb37f",
+    "prompt": "#e6d7ff",  # M1 positive control: a raw prompt, no question/matrix/intrusion classes
 }
 
 # Columns read from M3's records.parquet -- logprobs_fp16 (a full-vocab vector per row) is skipped.
@@ -147,7 +151,8 @@ def mask_figure(rows: pd.DataFrame):
     first = rows.iloc[0]
     ax.set_title(f"{first['stimulus_id']} / {first['question_key']}   "
                  f"({n} tokens, {int(rows['edited'].sum())} edited)", fontsize=11)
-    legend = [Patch(facecolor=c, edgecolor="black", label=k) for k, c in CLASS_COLORS.items()]
+    present = set(rows["class"])
+    legend = [Patch(facecolor=c, edgecolor="black", label=k) for k, c in CLASS_COLORS.items() if k in present]
     legend += [Patch(facecolor="white", edgecolor="red", linewidth=2.5, label="edited (red outline)"),
                Line2D([], [], marker="*", color="black", linestyle="", markersize=11,
                       label="metric_pos (answer read here)"),
@@ -161,9 +166,11 @@ def mask_figure(rows: pd.DataFrame):
 
 
 def readout_grid(df: pd.DataFrame):
-    """Lens top-1 token at each (matrix position x sampled layer). `df` = readout_top1_sp01.parquet."""
+    """Lens top-1 token at each (matrix position x sampled layer). `df` = check2_readout.parquet
+    (top-k lists per row; the top-1 is the first entry)."""
     plt = _plt()
 
+    df = df.assign(top1_text=[str(t[0]) for t in df["topk_text"]], top1_id=[int(t[0]) for t in df["topk_ids"]])
     text = df.pivot(index="pos", columns="layer", values="top1_text").sort_index()
     ids = df.pivot(index="pos", columns="layer", values="top1_id").loc[text.index, text.columns]
     grid = text
@@ -196,11 +203,13 @@ def cka_heatmap(df: pd.DataFrame):
 
 
 def band_signatures(df: pd.DataFrame, motor_onset: int | None):
-    """Four stacked per-layer signatures. `df` = band_signatures.parquet."""
+    """Stacked per-layer signatures, one panel per column of band_signatures.parquet (cka_onset_score,
+    agreement_top1, agreement_top<k>, kurtosis)."""
     plt = _plt()
 
-    fig, axes = plt.subplots(4, 1, figsize=(11, 10), sharex=True)
-    for ax, col in zip(axes, ["cka_onset_score", "agreement_top1", "agreement_top5", "kurtosis"]):
+    cols = [c for c in df.columns if c != "layer"]
+    fig, axes = plt.subplots(len(cols), 1, figsize=(11, 2.5 * len(cols)), sharex=True)
+    for ax, col in zip(axes, cols):
         ax.plot(df["layer"], df[col], marker=".")
         ax.set_ylabel(col, fontsize=8)
         if motor_onset is not None:
@@ -392,9 +401,13 @@ def _m0(run_dir: Path, formats, out_dir) -> list[Path]:
 
 def _m1(run_dir: Path, formats, out_dir) -> list[Path]:
     written = []
-    if not _missing(run_dir, "readout_top1_sp01.parquet"):
-        df = pd.read_parquet(run_dir / "readout_top1_sp01.parquet")
-        written += save(readout_grid(df), "readout_top1_sp01", formats, run_dir, out_dir)
+    if not _missing(run_dir, "check2_readout.parquet"):
+        df = pd.read_parquet(run_dir / "check2_readout.parquet")
+        written += save(readout_grid(df), f"readout_top1_{df['stimulus_id'].iloc[0]}", formats, run_dir, out_dir)
+    if not _missing(run_dir, "check3_masks.parquet"):
+        masks = pd.read_parquet(run_dir / "check3_masks.parquet")
+        for cond, rows in masks.groupby("question_key", sort=False):
+            written += save(mask_figure(rows), f"masks/check3_{cond}", formats, run_dir, out_dir)
     if not _missing(run_dir, "cka.parquet"):
         written += save(cka_heatmap(pd.read_parquet(run_dir / "cka.parquet")), "cka_heatmap", formats, run_dir, out_dir)
     if not _missing(run_dir, "band_signatures.parquet", "figure_params.json"):

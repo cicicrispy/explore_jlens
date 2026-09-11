@@ -1,0 +1,7 @@
+# M1 step 0 (Phase B, GPU box): scripts/download.py -- download the real model and the lens, and
+# record what was found. Hand-written. Copied into the run folder's settings/.
+#
+#   python scripts/download.py     (setup.sh runs it on a cuda machine)
+
+name: download       # run folders: runs/M1/download_<model>_<UTC start time>/
+milestone: M1
