@@ -18,7 +18,7 @@ band: workspace            # the band from configs/bands.yaml -- M3 uses the wor
 
 # REQUIRED: folder names of finished runs, e.g. loading_20260912-031000 / validate_20260912-031000.
 from_m2_run: loading_20260911-211140          # runs/M2/<this>/: the treatment pair (pair_score argmax); the controls run's M2 run
-controls_run: null         # runs/M3/<this>/: the controls run you accepted, e.g. controls_question_20260912-031000
+controls_run: controls_question_20260911-213928   # runs/M3/<this>/: the controls run you accepted (2026-09-11)
 m1_validate_run: validate_20260911-205658     # runs/M1/<this>/: must have passed, or be accepted in configs/m1_acceptance.yaml
 
 # Fixed by the spec or agreed with the human -- change only after asking.

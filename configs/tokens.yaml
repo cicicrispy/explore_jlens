@@ -23,11 +23,11 @@ controls:
     # the two languages and their countries, in any script
     ["Spanish"," Spanish"," spanish","French"," French"," french","西班牙语","法语","西班牙","法国",
      " español"," francés"," espagnol"," français"," langue"," idioma"," lengua"," bilingual",
-     "franc","franç","spain","españ","espagn","hispan","castellan","madrid","paris",
+     "franc","franç","spain","españ","espagn","hispan","castellan","madrid","paris","universidad",
      "马德里","巴黎","法兰西","法國",
      # any OTHER language's name (another language is not "no language")
      "english","portugu","german","deutsch","chinese","mandarin","japanese","korean","italian",
-     "russian","arabic","hindi","dutch",
+     "russian","arabic","hindi","dutch","latin","filipino",
      "英语","英文","德语","德文","日语","日文","日本語","汉语","中文","韩语","韩文","한국어",
      "俄语","意大利语","葡萄牙语","阿拉伯语",
      # answer-like tokens beyond the exact answer tokens (.YesNo, YES, _yes)

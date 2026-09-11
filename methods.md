@@ -616,6 +616,13 @@ All dates 2026-09-11 unless noted.
   long as they do not say which language; any other
   language's name, anything about Spain/France/Spanish/French (Madrid, Paris, …) and Yes-like tokens
   are excluded. `control_ineligible` extended accordingly (substrings); both controls runs repeated.
+  Second review (`controls_question_20260911-213928`, `controls_message_20260911-214207`): one
+  Spanish word among the picks (*Universidad*) and two language names among the runners-up
+  (*Latin*, *Filipino*) added to the blocklist. Kept by the human's decision: words for "language" in
+  other languages (' ภาษา', ' زبان', ' lingua', ' bahasa') and other foreign words (' jedynie'),
+  which name no language, and odd tokens such as '\\n', ':I', ':H'. Accepted for the question set:
+  `controls_question_20260911-213928` (none of the three additions was among its picks). The
+  message set's controls are picked once more with the final blocklist.
 - Figures: M3 summary and combined figures uploaded to the dataset, mask figures and M2 figures not;
   added the flip heatmap, the margin change and the M2 rank heatmaps; panel c kept exactly as
   specified.
