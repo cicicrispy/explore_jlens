@@ -3,6 +3,7 @@
 ## Revision log
 - `sp_01` intrusion sentence changed from "...vint se percher **sur** la branche la plus proche..." to "...vint se percher **au bout de** la branche..." — `sur` is a literal Spanish word (south) and was flagged in the first pass; it's now removed rather than merely noted. Dropped "la plus proche" too, to keep the sentence at 14 words (was 15) after the edit. Spans re-verified programmatically.
 - `questions` key renamed from `content_probe` to `content` (same question text, same semantics: outdoors yes/no).
+- **Sentence spans 2-5 of every passage now start one character earlier**, at the single space that precedes them, so consecutive spans are contiguous (no gap). Reason: the Qwen tokenizers (both the stand-in Qwen3-0.6B and the real Qwen3.6-27B) attach that space to the next word (e.g. `" Un"`), so a sentence's tokens include it; with the old spans they spelled `" " + sentence`. Only `char_start` changed (64 values); text, roles, `char_end` and word counts are unchanged (`split()` ignores the leading space). Verified before writing: exactly one space before each of the 64 sentences, and each new span equals `" "` + the old span. Decided with the human on 2026-09-11, after `scripts/m1_tokens.py` run `tokens_20260911-054336`.
 
 ## Word-count table (computed via `len(sentence.split())`, summed over matrix-role sentences; intrusion is a single sentence)
 

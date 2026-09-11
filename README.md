@@ -284,19 +284,15 @@ effect" -- and `panel_c` leaves those out of the flip rates.
 
 ## Known open items (flagged during writing, need your input)
 
-- **Token boundaries -- decide at M1 with the real tokenizer (Qwen3.6-27B).**
-  `tests/test_prompts.py::test_region_tokens_spell_their_text_exactly` is **expected to fail until
-  then** (so `pytest tests/` shows 1 failure); any other failure is new. With the stand-in
-  tokenizer (Qwen3-0.6B) it finds two things, in all 64 prompts and nothing else:
-  - the question's last token is `.\n\n` (period + the blank line before the passage). Decided:
-    it stays "question" and is edited (see "Notes for the write-up").
-  - sentences 2-5 each start with a token that includes the space before the word (e.g. `" Un"`).
-    Decided: accepted as part of that token.
-
-  At M1: run the same check on the real tokenizer. If it also attaches the space to the next word,
-  update the sentence spans in `stimuli/stimuli.json` so sentences 2-5 start at that space --
-  exactly one space, never two, and no change to the text itself -- and then make the test expect
-  exactly those characters.
+- **Token boundaries -- resolved at M1 (2026-09-11).** Every region's tokens (the question, each
+  sentence) must spell exactly that region's text; `tests/test_prompts.py::
+  test_region_tokens_spell_their_text_exactly` checks all 64 prompts with both tokenizers:
+  - `[real]` (Qwen3.6-27B, the model used from M1 on): must match exactly, no extra characters.
+  - `[standin]` (Qwen3-0.6B, M0 only): allowed exactly one known extra -- it merges the question's
+    final period with the following blank line into one token `.\n\n`. The real tokenizer doesn't.
+  - Both tokenizers attach the space before sentences 2-5 to the next word (e.g. `" Un"`), so
+    `stimuli/stimuli.json`'s spans for those sentences now start at that space (see
+    `stimuli/notes.md`, revision log; found by `scripts/m1_tokens.py`, run `tokens_20260911-054336`).
 - **Antonym control departs from invariant 3 on purpose.** To replicate the paper exactly, the
   positive control swaps at every token position, including the first ones that invariant 3 says to
   skip; this applies to that one control only (`configs/experiments/m1_validate.yaml`).
@@ -321,13 +317,15 @@ effect" -- and `panel_c` leaves those out of the flip rates.
 
 ## Notes for the write-up
 
-- **The question's last token also carries the paragraph break -- and it is edited (decided
-  2026-09-10).** Qwen's tokenizer merges the question's final period with the blank line that
-  separates the question from the passage into one token, `.\n\n`. That token is labelled
-  "question", so every question-position intervention (all of M3) edits it as well: the edit also
-  touches the token that encodes the paragraph break between question and passage. Found in all 64
-  prompts by `tests/test_prompts.py::test_region_tokens_spell_their_text_exactly` with the stand-in
-  tokenizer (Qwen3-0.6B); to be re-checked with the real tokenizer (Qwen3.6-27B) at M1.
+- **The question's end is clean with the real model; with the stand-in it isn't.** With
+  Qwen3.6-27B's tokenizer the question ends in a plain `.` token and the blank line before the
+  passage is a separate token that is not edited. The stand-in Qwen3-0.6B (M0 only) merges the
+  period and the blank line into one token `.\n\n`, which is labelled "question" -- so in M0's
+  smoke cells the edit also touched the paragraph break. Only M0 used the stand-in; nothing from M1
+  on is affected. (Found by the region check, 64/64 prompts, and `scripts/m1_tokens.py`.)
+- **Each of sentences 2-5 starts with a token that includes the space before it** (e.g. `" Un"`);
+  the tokenizer attaches the space to the next word, so an edit to a sentence's positions also
+  touches that space. The sentence spans in `stimuli/stimuli.json` include it since 2026-09-11.
 
 ## Secrets
 

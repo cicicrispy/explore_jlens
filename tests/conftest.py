@@ -23,6 +23,15 @@ def standin_model(model_cfg):
 
 
 @pytest.fixture(scope="session")
+def real_tokenizer(model_cfg):
+    """The REAL model's tokenizer + chat template (configs/model.yaml hf_id) -- tokenizer files only,
+    no weights (a few MB, cached in HF_HOME after the first download)."""
+    from transformers import AutoTokenizer
+
+    return AutoTokenizer.from_pretrained(model_cfg["hf_id"], revision=model_cfg["revision"])
+
+
+@pytest.fixture(scope="session")
 def random_lens(standin_model):
     d = model_mod.d_model(standin_model)
     n = model_mod.n_layers(standin_model)

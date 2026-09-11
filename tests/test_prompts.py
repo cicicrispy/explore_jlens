@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from jlens_spec import prompts as prompts_mod
 
 
@@ -90,21 +92,36 @@ def test_mask_rows_carry_everything_the_mask_figure_draws(standin_model):
     assert [r["pos"] for r in rows if r["is_metric_pos"]] == [p.metric_pos]
 
 
-def test_region_tokens_spell_their_text_exactly(standin_model):
+# Characters a tokenizer is KNOWN to add to a region, beyond the region's exact text, as
+# (before, after) -- decided with the human; anything else is a failure. The stand-in (M0) merges
+# the question's final period with the blank line after it into one token ".\n\n"; the real model's
+# tokenizer (M1) ends the question with a plain ".". Sentence spans in stimuli.json include the one
+# space before sentences 2-5 (the tokenizers attach it to the next word), so sentences match exactly.
+KNOWN_EXTRA = {
+    "standin": {"question": ("", "\n\n")},
+    "real": {},
+}
+
+
+@pytest.mark.parametrize("which", ["standin", "real"])
+def test_region_tokens_spell_their_text_exactly(which, request):
     """For every prompt, the tokens labelled "question" must spell EXACTLY the question text, and
     the tokens labelled with a sentence's role (matrix/intrusion) that overlap that sentence must
-    spell EXACTLY that sentence -- nothing stripped, no extra characters. A token that also carries
-    characters from outside its region (a separator newline, the space before a sentence, template
-    text) would be edited along with the region, so every such token must be known. All 64 prompts
-    are checked and every mismatch is listed, not just the first."""
+    spell EXACTLY that sentence -- nothing stripped, no extra characters beyond KNOWN_EXTRA. A token
+    that also carries characters from outside its region would be edited along with the region, so
+    every such token must be known. Run for the stand-in tokenizer (M0) and the real one (M1). All
+    64 prompts are checked and every mismatch is listed, not just the first."""
+    tok = (request.getfixturevalue("standin_model").tokenizer if which == "standin"
+           else request.getfixturevalue("real_tokenizer"))
     stim = _load_stimuli()
-    fmt = _fmt(standin_model, stim)
+    fmt = {"tokenizer": tok, "questions": stim["questions"]}
     problems = []
     for stimulus in stim["passages"]:
         for qkey in stim["questions"]:
             p = prompts_mod.build_prompt(stimulus, qkey, fmt)
             for r in prompts_mod.region_check(p):
-                if not r["match"]:
+                before, after = KNOWN_EXTRA[which].get(r["region"], ("", ""))
+                if r["tokens_text"] != before + r["region_text"] + after:
                     problems.append(
                         f"{r['stimulus_id']}/{r['question_key']} {r['region']} chars "
                         f"[{r['char_start']}:{r['char_end']}]: first token {r['first_token']!r} "
