@@ -7,7 +7,10 @@ paper. It describes the **method**; it reports no scientific results.
 **Status (2026-09-11).** All code for milestones M0–M3 is written and tested. M0 has run and is
 signed off. M1's tokenizer step has run on a Mac with the final prompt format (no region mismatch),
 and the model and lens have been downloaded on the GPU machine (lens version `0731326e`, 63 layers,
-width 5,120 as the model's); M1's lens validation, M2 and M3 have **not** run on the real model yet. The whole M2 → M3 pipeline has been exercised end to end on a Mac "dry run" (a small
+width 5,120 as the model's). The first lens validation (`validate_20260911-201047`) stopped at the
+causal positive control; its swap turned out to undo itself across the band, and the swap is now
+clamped to the clean pass (Section 5). The validation is to be run again; M2 and M3 have **not** run
+on the real model yet. The whole M2 → M3 pipeline has been exercised end to end on a Mac "dry run" (a small
 stand-in model with a **random** lens), which checks the machinery only: its numbers carry no
 information. Section 12 lists what is pending.
 
@@ -166,25 +169,44 @@ invariant 3, see Section 11).
 
 ## 5. The swap
 
-All interventions are made inside **one forward pass**, at every layer of a band, in ascending order;
-each layer sees the stream already edited at earlier layers ("clamped" swap). Positions outside the
-position set are left bitwise unchanged.
+All interventions are made inside **one forward pass**, at every layer of a band, in ascending order.
+Each layer sees the stream already edited at earlier layers and **clamps** its coordinates to values
+taken from a clean (unedited) pass of the same prompt. Positions outside the position set are left
+bitwise unchanged.
 
 **Treatment (swap).** Let s be the token of the language being removed and t the one swapped in, and
-V = [v_s, v_t] (d × 2). At each edited position and layer, with c = pinv(V)·h the state's
-coordinates along the two lens vectors,
+V = [v_s, v_t] (d × 2), from the layer's lens vectors. At each edited position and layer, let
+c_clean = pinv(V)·h_clean be the clean pass's coordinates along the two lens vectors there. The swap
+sets the stream's two coordinates to
 
-  h ← h + α·V·(flip(c) − c),   α = 1,
+  target = c_clean + α·(flip(c_clean) − c_clean),   α = 1,
 
-where flip exchanges the two coordinates. Everything orthogonal to span(v_s, v_t) is untouched. Two
-quantities describe the size of an edit:
+where flip exchanges the two coordinates: h ← h + V·(target − pinv(V)·h). At α = 1, "s" takes the
+clean value of "t" and vice versa. Everything orthogonal to span(v_s, v_t) is untouched. At the
+first layer of the band, the stream is still clean and this is the paper's formula
+h + α·V·(flip(c) − c); at later layers the edit only corrects what the model has rewritten since.
 
-- |Δc| = ‖flip(c) − c‖ = √2·|c_s − c_t| — the change in lens coordinates;
-- ‖Δh‖ = |c_s − c_t|·‖v_s − v_t‖ — the change in the residual stream.
+*Why clamp to the clean pass* (a departure from the specification's reference code, Section 11).
+The specification's loop flips the stream's **current** coordinates at every layer. Over a band,
+each layer then undoes the one before: flipping twice is back to the start. At α = 1, an even number
+of layers comes back close to clean; at α = 2, the gap between the two coordinates is multiplied by
+−3 at every layer. The first M1 run (32 layers) showed exactly this: the positive control's answer
+barely moved at α = 1, and at α = 2 " big" took over the output. The paper describes the swap as
+"clamping a lens coordinate … at every band layer" (the released code's experiment notes,
+`data/experiments/README.md` of github.com/anthropics/jacobian-lens) and, in another experiment,
+"clamping the relevant J-lens coordinates to their clean pass values at every position and layer";
+neither says for the swap where the values come from, and the released code has no swap. With two pairs (M1's positive control), each pair is clamped in turn,
+each in its own two-token basis, at every layer.
 
-Both are logged at every edited position and layer, and the change actually produced in the stream
-(‖h_new − h‖) is measured at **every** position and layer; any change outside the planned positions
-stops the run.
+Two quantities describe the size of an edit, both measured on the clean pass:
+
+- |Δc| = ‖target − c_clean‖ = α·√2·|c_s − c_t| — the change in lens coordinates;
+- ‖Δh‖ = ‖V·(target − c_clean)‖ = α·|c_s − c_t|·‖v_s − v_t‖ — the change in the residual stream.
+
+Both are logged at every edited position and layer, together with the stream's own coordinates just
+before the clamp. The change actually written into the stream (‖h_new − h‖: the full edit at the
+first band layer, then the corrections) is measured at **every** position and layer; any change
+outside the planned positions stops the run.
 
 **Treatment pair.** Each language has four surface forms whose first tokens can carry the label
 (" Spanish", "Spanish", " spanish", 西班牙语 and the French equivalents), paired by form: *plain*,
@@ -213,8 +235,12 @@ positions, layers and prompt:
   v_b]); the language coordinates are untouched. Its per-position α is set so that ‖Δh‖ equals the
   treatment's ‖Δh‖ exactly (`norm_scale` = 1), at every position and layer. It asks whether any edit
   this large in the lens's space would have the same effect.
-- **random direction** — a random unit vector (fixed per layer and seed), scaled to the treatment's
-  ‖Δh‖ at each position. It asks whether any disturbance this large at those positions would.
+- **random direction** — a random unit vector u (fixed per layer and seed): the stream's coordinate
+  along u is clamped to its clean value plus the treatment's ‖Δh‖ at each position. It asks whether
+  any disturbance this large at those positions would.
+
+All controls are clamped to the clean pass like the swap (Section 5), and "the treatment's ‖Δh‖" is
+its size on the clean pass, at each position and layer.
 
 Three label-to-present tokens (chosen per check, Section 6.1) and three big non-label pairs are used,
 each as its own cell.
@@ -282,9 +308,9 @@ coverage sets no bar there, and this is flagged in the run's summary.
 
 The selection, all candidates and all pairs are saved in the controls run's folder (`controls/`); the
 position set's first M3 run keeps a copy of the selection and the second reuses it. Each run's
-summary reports each control's **measured** edit
-size relative to the treatment's (|Δc| and ‖Δh‖), since the clean-pass estimate cannot anticipate
-the effect of edits at earlier layers of the band.
+summary reports each control's edit size relative to the treatment's (|Δc| and ‖Δh‖), as logged by
+the cells. Since every edit is clamped to the clean pass and its sizes are measured there (Section
+5), these should equal the selection's estimates; a difference would point to a bug.
 
 ---
 
@@ -473,6 +499,7 @@ that. No hypothesis tests are run at this stage.
 |---|---|---|---|
 | Prompt | user turn = question + passage | the paper's wrapper (Section 4); the paper's wording for *report* and *hello* | match the paper exactly (2026-09-11) |
 | Skipped start positions | skip the first ~4 positions (invariant 3) | none (`skip_first` = 0) | the paper swaps across all question tokens; the first positions are template tokens, never edited |
+| Swap across a band | at every band layer, flip the stream's current coordinates (reference code) | at every band layer, set the two coordinates to the clean pass's, swapped (α-scaled); controls clamped the same way; sizes measured on the clean pass (Section 5) | the reference loop undoes itself layer by layer (first M1 run); the paper calls the swap a clamp |
 | M1 positive control | — | edits every position (incl. the first), raw prompt | exactly as in the paper; this control only |
 | M3 position sets | question only | question **and** message | the paper's text says "across the question tokens", its figure panels "at every position"; both run |
 | Invariant 7's stop | positives before anomaly; stop if they don't flip | positives and anomaly as separate runs; the human reads the positives summary before the anomaly run | a human decision, no threshold |
@@ -496,8 +523,9 @@ file in a shell), and a run is resumed only if the code is unchanged since it st
 
 ## 12. Pending and open items
 
-- M1 on the GPU: download the model and lens, record the lens version, run the validation. **If the
-  causal positive control fails at α = 1 and α = 2, the project stops.**
+- M1 on the GPU: run the validation again with the clamped swap. **If the causal positive control
+  fails at α = 1 and α = 2, the project stops.**
+- The M3 dry runs again with the clamped swap (the earlier ones used the reference loop).
 - The human fills the three layer bands from M1's figures.
 - M2 and the four M3 runs on the real model.
 - Confirm on the GPU that the lens file's layer keys are block indices (matching the decoder's
@@ -541,6 +569,14 @@ All dates 2026-09-11 unless noted.
   it was removed from the test suite (the region check is now run on the real tokenizer only).
   `setup.sh` no longer runs tests on the GPU machine (nor the GPU-marked step, which had no tests),
   and its lock files are git-ignored.
+- First M1 validation on the GPU (`validate_20260911-201047`): final-layer agreement top-10 overlap
+  10/10 at all 50 positions; the causal positive control failed — at α = 1 大 stayed on top (19.0 →
+  18.75) and 长 rose from 12.9 to 14.8; at α = 2 " big" took over (logit 52). This is what the
+  specification's reference loop predicts over 32 layers (each layer flips back what the previous
+  one flipped). The paper's released code (github.com/anthropics/jacobian-lens) has no swap; its
+  notes call the swap a clamp at every band layer. Decided: clamp to the clean pass (target =
+  c_clean + α·(flip(c_clean) − c_clean)); two pairs clamped in turn, each in its own basis; all
+  controls are clamps too, sized on the clean pass (Section 5, 6). M1 validation to be run again.
 - Figures: M3 summary and combined figures uploaded to the dataset, mask figures and M2 figures not;
   added the flip heatmap, the margin change and the M2 rank heatmaps; panel c kept exactly as
   specified.

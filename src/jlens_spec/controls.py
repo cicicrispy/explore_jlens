@@ -25,9 +25,10 @@ Measures -- always within the run's band only, at the positions the treatment ed
   lens readout's top-`pool_k` tokens at >= 1 edited position (from M2's saved top-100 readout). A
   check's value = the mean over its prompts.
 - |Δc| of a swap between tokens s and x at one position and layer = ||flip(c) - c|| with
-  c = pinv([v_s, v_x]) h -- the same quantity M3 logs as delta_c_norm -- here from a CLEAN forward
-  pass (M3 then measures the real value). A check's value = the mean over its prompts x edited
-  positions x band layers -- the same average the M3 summary reports as the measured ratio.
+  c = pinv([v_s, v_x]) h from a CLEAN forward pass -- the same quantity M3 logs as delta_c_norm (the
+  swap is clamped to the clean run, so M3's logged sizes are clean-run sizes too; interventions
+  module docstring). A check's value = the mean over its prompts x edited positions x band layers --
+  the same average the M3 summary reports as the size ratio.
 
 Candidates: every token in the top-`pool_k` readout at the edited positions within the band, on any
 of the 64 prompts, minus

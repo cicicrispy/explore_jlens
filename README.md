@@ -12,7 +12,10 @@ As of 2026-09-11 (you run everything yourself and report back; the assistant wri
 - **M1: in progress.** Token checks with the paper's prompt: `runs/M1/tokens_20260911-183533` (0
   region mismatches). Download on the GPU box (Lambda, 1x H100 80 GB):
   `runs/M1/download_Qwen3.6-27B_20260911-194736` (lens `0731326e…`, 63 layers, width matches).
-  Validation (`m1_validate.py`) has **not** run yet.
+  First validation `runs/M1/validate_20260911-201047` stopped at the positive control: the swap as
+  the spec wrote it undoes itself across the band (each layer flips back what the one before
+  flipped). The swap is now **clamped to the clean pass** ("Departures from the spec"); validation
+  is to be run again.
 - **M2, M3: code written (stage 3), not executed.** Run folders, one file per prompt, uploads as each
   prompt finishes, resume, controls picked by rule in a separate step you review, two position sets,
   a Mac dry run.
@@ -178,7 +181,8 @@ afterwards from the saved files (`src/jlens_spec/m1_checks.py`):
 - readout reproduction on `sp_01` (figure `readout_top1_sp_01`);
 - **the Chinese-antonym causal positive control, exactly as in the paper**: the raw prompt
   `"小"的反义词是"` (no chat template), ` big`->` long` and ` bigger`->` longer` swapped at **every**
-  token position across layers 25-75% of depth; 长 should become the top-1 answer instead of 大. Alpha 2
+  token position across layers 25-75% of depth (each pair clamped in turn to the clean pass's
+  coordinates, swapped); 长 should become the top-1 answer instead of 大. Alpha 2
   runs only if alpha 1 fails; if both fail, M1 stops (do not run M2 -- M2 and M3 refuse to start
   unless the M1 run you name passed). Where the stream actually changed is measured at every
   position, and any change outside the planned positions stops the run; the mask figures
@@ -426,7 +430,8 @@ ascending order inside a single trace and don't care whether those layers are on
 several disjoint blocks. So a "swap across layers 18-30 and 40-50" intervention is just
 `apply(..., layers=env.expand_band([[18, 30], [40, 50]]), ...)`: one cell, one trace, every layer in
 both blocks edited together, each seeing the previously-edited stream from earlier layers in the list
-(the "clamped" behavior). An M3 experiment file names its band (`band: workspace` for the real M3
+and clamping its coordinates to targets from one clean pass of the prompt (`interventions.clean_states`;
+`runner.run_prompt` records it once per prompt). An M3 experiment file names its band (`band: workspace` for the real M3
 runs; the dry run's chain 2 uses the split `early_late` band to show that works).
 
 ## Running a subset of cells (tinkering, not the official M3 runs)
@@ -455,6 +460,19 @@ A cell with no clean baseline records `flip=None`, `top1_changed=None`, `clean_m
 unknown, not "no effect" -- and `panel_c` leaves those out of the flip rates.
 
 ## Departures from the spec (all decided with the human)
+
+- **The swap is clamped to the clean pass** (decided 2026-09-11, after M1 run
+  `validate_20260911-201047`): the spec's reference loop flips the stream's *current* coordinates at
+  every band layer, so each layer undoes the one before (at alpha 1 an even number of layers comes
+  back near clean; at alpha 2 the gap grows 3x per layer). Now every layer sets the two coordinates
+  to `c_clean + alpha * (flip(c_clean) - c_clean)`, with `c_clean` from one unedited pass of the same
+  prompt (`src/jlens_spec/interventions.py`). Two pairs (M1's control) are clamped in turn, each in
+  its own basis. The controls are clamps too (big_nonlabel with its own alpha; random_direction sets
+  its coordinate along u to the clean value + the size), and every logged size (|Δc|, ||Δh||, what
+  controls are matched to) is the clamp's size on the clean pass; what is actually written per layer
+  is the `change` column. The paper's released code (github.com/anthropics/jacobian-lens) has no
+  swap; its notes call the swap "clamping a lens coordinate ... at every band layer". methods.md
+  Section 5.
 
 - **Prompt = the paper's** (2026-09-11): the wrapper around question and passage, and the paper's
   wording for `report` ("Answer in one word.") and `hello` ("Answer with just that word.") -- logged
@@ -509,11 +527,12 @@ unknown, not "no effect" -- and `panel_c` leaves those out of the flip rates.
   `fmt` via `prompts.make_fmt(tokenizer, stimuli, prompt_format)`.
 - Several other module-boundary assumptions (nnsight envoy call semantics outside a trace, the
   `.pt` lens artifact's exact key layout, `runner`'s cell ordering) are documented inline where they
-  occur (search for "ASSUMPTION" / "flagged" in `src/jlens_spec/`). None of this has touched a real
-  nnsight trace of the 27B model or the real lens file yet, so treat first-run errors there as
-  expected, not a sign anything is fundamentally wrong.
+  occur (search for "ASSUMPTION" / "flagged" in `src/jlens_spec/`). The first M1 validation ran the
+  27B model and the real lens through loading, the readout and an in-trace edit without errors;
+  check 4 (band signatures) has not run on it yet.
 - `test_interventions.py`'s check 7 ("apply reproduces the mini-paper's `run` to 1e-4") is skipped
-  -- no reference implementation is available in this repo to compare against.
+  -- the paper's released code (github.com/anthropics/jacobian-lens) has the lens but no swap, so
+  there is no reference to compare against.
 
 ## Notes for the write-up
 

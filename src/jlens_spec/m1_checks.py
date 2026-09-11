@@ -116,7 +116,8 @@ def check3_positive_control(model, lens, cfg: dict, save_k: int) -> dict:
     """The paper's Chinese antonym control, exactly as in the paper: the raw prompt (no chat
     template), the swap at EVERY token position (a deliberate departure from invariant 3's
     skip-the-first-positions rule, for this control only), across the lens layers within
-    cfg["layer_range"] of depth. The next alpha in cfg["alphas"] runs only if the previous one did
+    cfg["layer_range"] of depth, each layer's coordinates clamped to the clean run's, swapped (the
+    interventions module docstring). The next alpha in cfg["alphas"] runs only if the previous one did
     not make cfg["expect_swapped"] the top-1 token (spec: "If it fails at α=1, run α=2").
 
     Where the stream actually changed is measured at every position (apply(return_changes=True));
@@ -162,11 +163,12 @@ def check3_positive_control(model, lens, cfg: dict, save_k: int) -> dict:
     with model.trace(input_ids):
         clean = model.output.logits[0, n - 1].float().save()
     results = [result_row("clean", None, clean)]
+    states = iv.clean_states(model, p, layers)  # the clamps' targets (interventions module docstring)
     masks, change_rows, unchanged_all = [], [], []
     for alpha in cfg["alphas"]:
         condition = f"swap_alpha{alpha:g}"
         logits, _logs, changes = iv.apply(model, lens, p, "swap", layers, mask,
-                                          return_changes=True, pairs=pairs, alpha=alpha)
+                                          return_changes=True, clean=states, pairs=pairs, alpha=alpha)
         outside, unchanged = iv.edit_problems(changes, mask, "swap")
         if outside:
             raise RuntimeError(f"{condition}: the stream changed at unplanned positions "

@@ -97,11 +97,14 @@ def _resolve_pair_words(cfgs: dict, cell: Cell, matrix_lang: str) -> tuple[str, 
     raise ValueError(f"unknown direction {cell.direction!r}")
 
 
-def run_cell(model, lens, cell: Cell, cfgs: dict, target_norms: dict | None = None):
+def run_cell(model, lens, cell: Cell, cfgs: dict, target_norms: dict | None = None,
+             clean_states: dict | None = None):
     """Run one cell. Returns (CellRecord, detail rows). The detail rows -- one per band layer x
     prompt position -- hold where the stream ACTUALLY changed (measured at every position, not only
     the planned ones) next to the planned intervention's log (hygiene invariant 4). A change at any
-    position outside the plan raises RuntimeError: that is a hard failure."""
+    position outside the plan raises RuntimeError: that is a hard failure. `clean_states`: the
+    prompt's unedited stream at the cell's layers (interventions.clean_states), which the clamps'
+    targets come from; None records it for this cell alone."""
     stimulus = cfgs["stimuli"][cell.stimulus_id]
     matrix_lang = stimulus["matrix_lang"]
 
@@ -127,7 +130,8 @@ def run_cell(model, lens, cell: Cell, cfgs: dict, target_norms: dict | None = No
     else:
         raise ValueError(f"unknown kind {cell.kind!r}")
 
-    logits, logs, changes = iv.apply(model, lens, prompt, cell.kind, cell.layers, mask, return_changes=True, **kw)
+    logits, logs, changes = iv.apply(model, lens, prompt, cell.kind, cell.layers, mask, return_changes=True,
+                                     clean=clean_states, **kw)
     outside, unchanged = iv.edit_problems(changes, mask, cell.kind)
     if outside:
         raise RuntimeError(f"{cell.stimulus_id}/{cell.question_key} {cell.direction} {cell.kind}"
@@ -193,6 +197,7 @@ def _detail_rows(cell: Cell, prompt, mask, logs, changes) -> list[dict]:
                 "change": float(size),
                 "c_before_0": lg.c_before[0] if lg else nan, "c_before_1": lg.c_before[1] if lg else nan,
                 "c_after_0": lg.c_after[0] if lg else nan, "c_after_1": lg.c_after[1] if lg else nan,
+                "c_stream_0": lg.c_stream[0] if lg else nan, "c_stream_1": lg.c_stream[1] if lg else nan,
                 "delta_c_norm": lg.delta_c_norm if lg else nan, "delta_h_norm": lg.delta_h_norm if lg else nan,
                 "alpha": lg.alpha if lg else nan,
             })
@@ -268,15 +273,23 @@ KIND_ORDER = {"identity": 0, "swap": 1, "label_to_present": 2, "big_nonlabel": 3
 def run_prompt(model, lens, cells: list, cfgs: dict, target_norms_cache: dict | None = None):
     """Run every cell of ONE prompt, `identity` first, then `swap`, then the controls (see the
     module docstring). Returns (records, detail rows). `cfgs["clean_cache"]` and
-    `target_norms_cache` are updated in place so later prompts/cells can reuse them."""
+    `target_norms_cache` are updated in place so later prompts/cells can reuse them. The prompt's
+    unedited stream at every edited layer is recorded once, in one plain trace, and shared by its
+    cells (the clamps' targets, interventions.clean_states)."""
     keys = {_clean_key(c) for c in cells}
     assert len(keys) == 1, f"run_prompt expects the cells of one prompt, got {sorted(keys)}"
     cfgs.setdefault("clean_cache", {})
     target_norms_cache = {} if target_norms_cache is None else target_norms_cache
+    edit_layers = sorted({int(l) for c in cells if c.kind != "identity" for l in c.layers})
+    states = None
+    if edit_layers:
+        stimulus_id, question_key = next(iter(keys))
+        prompt = prompts_mod.build_prompt(cfgs["stimuli"][stimulus_id], question_key, cfgs["fmt"])
+        states = iv.clean_states(model, prompt, edit_layers)
     records, details = [], []
     for c in sorted(cells, key=lambda c: (KIND_ORDER.get(c.kind, 99), c.direction, c.control_index)):
         tn = target_norms_cache.get(_norms_key(c)) if c.kind in ("big_nonlabel", "random_direction") else None
-        record, rows = run_cell(model, lens, c, cfgs, target_norms=tn)
+        record, rows = run_cell(model, lens, c, cfgs, target_norms=tn, clean_states=states)
         if c.kind == "identity":
             cfgs["clean_cache"][_clean_key(c)] = record
         if c.kind == "swap":

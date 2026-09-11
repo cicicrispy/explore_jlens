@@ -146,6 +146,74 @@ def test_label_to_present_logs_finite_delta():
     assert all(torch.isfinite(torch.tensor(log.delta_h_norm)) for log in logs)
 
 
+def _clean_and_edited(d=8, P=5, seed=3):
+    """A clean state and the 'same' state after earlier band layers' edits and the model's own
+    rewrites (here: clean + noise), plus two lens vectors."""
+    g = torch.Generator().manual_seed(seed)
+    h_clean = torch.randn(1, P, d, generator=g)
+    h_now = h_clean + torch.randn(1, P, d, generator=g)
+    v_s, v_t = torch.randn(d, generator=g), torch.randn(d, generator=g)
+    return h_clean, h_now, v_s, v_t, torch.ones(P, dtype=torch.bool)
+
+
+def test_a_second_swap_does_not_undo_the_first():
+    """The M1 failure (run validate_20260911-201047): flipping the stream's CURRENT coordinates at
+    every band layer undoes itself -- flip twice is back to clean. Clamped to the clean run, a
+    second application changes nothing."""
+    h_clean, _, v_s, v_t, mask = _clean_and_edited()
+    once, _ = iv.swap(h_clean, mask, v_s, v_t, h_clean=h_clean)
+    twice, _ = iv.swap(once, mask, v_s, v_t, h_clean=h_clean)
+    assert torch.allclose(twice, once, atol=1e-5)
+    assert not torch.allclose(twice, h_clean, atol=1e-3)
+
+
+def test_swap_sets_the_clean_runs_swapped_coordinates_whatever_the_stream_holds():
+    h_clean, h_now, v_s, v_t, mask = _clean_and_edited()
+    V, V_pinv = iv._basis(v_s, v_t)
+    P = V @ V_pinv
+    c_clean = torch.einsum("bpd,kd->bpk", h_clean, V_pinv)
+    for alpha in (1.0, 2.0):
+        h_new, logs = iv.swap(h_now, mask, v_s, v_t, alpha=alpha, h_clean=h_clean)
+        got = torch.einsum("bpd,kd->bpk", h_new, V_pinv)
+        assert torch.allclose(got, c_clean + alpha * (c_clean[..., [1, 0]] - c_clean), atol=1e-4)
+        # the rest of THIS stream (outside span(v_s, v_t)) is untouched
+        orth = torch.eye(h_now.shape[-1]) - P
+        assert torch.allclose(torch.einsum("de,bpe->bpd", orth, h_new),
+                              torch.einsum("de,bpe->bpd", orth, h_now), atol=1e-5)
+        # logged: the clamp's size on the clean run (not what this stream needed), and the
+        # stream's own coordinates before the clamp
+        _, on_clean = iv.swap(h_clean, mask, v_s, v_t, alpha=alpha)
+        assert [lg.delta_h_norm for lg in logs] == pytest.approx([lg.delta_h_norm for lg in on_clean], rel=1e-5)
+        assert [lg.delta_c_norm for lg in logs] == pytest.approx([lg.delta_c_norm for lg in on_clean], rel=1e-5)
+        c_now = torch.einsum("bpd,kd->bpk", h_now, V_pinv)
+        assert torch.allclose(torch.tensor([lg.c_stream for lg in logs]), c_now[0], atol=1e-5)
+
+
+def test_the_controls_are_clamps_too():
+    """label_to_present, big_nonlabel and random_direction: a second application changes nothing,
+    and big_nonlabel / random_direction have the target size on the clean run."""
+    h_clean, h_now, v_a, v_b, mask = _clean_and_edited()
+    tn = torch.tensor([1.0, 2.0, 0.5, 3.0, 1.5])
+
+    lp1, _ = iv.label_to_present(h_now, mask, v_a, v_b, h_clean=h_clean)
+    lp2, _ = iv.label_to_present(lp1, mask, v_a, v_b, h_clean=h_clean)
+    assert torch.allclose(lp1, lp2, atol=1e-5)
+
+    bn1, logs = iv.big_nonlabel(h_now, mask, v_a, v_b, tn, h_clean=h_clean)
+    bn2, _ = iv.big_nonlabel(bn1, mask, v_a, v_b, tn, h_clean=h_clean)
+    assert torch.allclose(bn1, bn2, atol=1e-5)
+    assert torch.allclose(torch.tensor([lg.delta_h_norm for lg in logs]), tn, rtol=1e-4)
+    bn_clean, _ = iv.big_nonlabel(h_clean, mask, v_a, v_b, tn, h_clean=h_clean)
+    assert torch.allclose((bn_clean - h_clean)[0].norm(dim=-1), tn, atol=1e-4)
+
+    rd1, logs = iv.random_direction(h_now, mask, tn, seed=0, layer=0, h_clean=h_clean)
+    rd2, _ = iv.random_direction(rd1, mask, tn, seed=0, layer=0, h_clean=h_clean)
+    assert torch.allclose(rd1, rd2, atol=1e-5)
+    assert torch.allclose(torch.tensor([lg.delta_h_norm for lg in logs]), tn)
+    rd_clean, _ = iv.random_direction(h_clean, mask, tn, seed=0, layer=0, h_clean=h_clean)
+    assert torch.allclose((rd_clean - h_clean)[0].norm(dim=-1), tn, atol=1e-4)
+
+
 def _trace_setup(standin_model, random_lens):
     import json
 
@@ -195,6 +263,31 @@ def test_apply_measures_where_the_stream_actually_changed(standin_model, random_
     for sizes in changes.values():
         assert all(sz == 0.0 for sz, m in zip(sizes, mask) if not m)
         assert all(sz > 0.0 for sz, m in zip(sizes, mask) if m)
+
+
+def test_apply_takes_its_targets_from_the_clean_run_across_the_band(standin_model, random_lens):
+    """Inside the trace, every band layer's targets come from the UNEDITED run (not from the stream
+    the earlier layers already edited): c_before at each layer = the clean run's coordinates there,
+    c_after = those swapped. At the first layer nothing is edited yet, so the stream's own
+    coordinates equal the clean ones; at the last, the earlier layers' edits have reached them."""
+    from jlens_spec import lens as lens_mod
+
+    p, _, mask, layers = _trace_setup(standin_model, random_lens)
+    states = iv.clean_states(standin_model, p, layers)
+    _, logs = iv.apply(standin_model, random_lens, p, "swap", layers, mask, s_token=" Spanish", t_token=" French")
+    assert {lg.layer for lg in logs} == set(layers)
+    for lg in logs:
+        v = lens_mod.lens_vectors(standin_model, random_lens, [" Spanish", " French"], lg.layer)
+        _, V_pinv = iv._basis(v[0], v[1])
+        want = states[lg.layer][0, lg.pos] @ V_pinv.T
+        assert torch.allclose(torch.tensor(lg.c_before), want.cpu(), rtol=1e-4, atol=1e-6)
+        assert torch.allclose(torch.tensor(lg.c_after), want.cpu()[[1, 0]], rtol=1e-4, atol=1e-6)
+        if lg.layer == layers[0]:
+            assert torch.allclose(torch.tensor(lg.c_stream), torch.tensor(lg.c_before), rtol=1e-4, atol=1e-6)
+    last = [lg for lg in logs if lg.layer == layers[-1]]
+    gap = max(float((torch.tensor(lg.c_stream) - torch.tensor(lg.c_before)).abs().max()) for lg in last)
+    scale = max(float(torch.tensor(lg.c_before).abs().max()) for lg in last)
+    assert gap > 1e-3 * scale
 
 
 def test_edit_problems_reports_spills_and_unchanged_positions():

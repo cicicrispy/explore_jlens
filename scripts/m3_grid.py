@@ -126,8 +126,9 @@ def _direction_checks(run_dir) -> list[str]:
 
 
 def _size_checks(run_dir, lang_of: dict) -> tuple[pd.DataFrame, list[str]]:
-    """Each control's measured edit size vs the treatment's (same prompt and direction): mean over
-    planned positions x layers of |Δc| and of ||Δh||, as ratios control / swap. label_to_present is
+    """Each control's edit size vs the treatment's (same prompt and direction): mean over planned
+    positions x layers of the logged |Δc| and ||Δh|| -- the clamp's size on the clean run
+    (interventions module docstring) -- as ratios control / swap. label_to_present is
     reported per check (each check has its own tokens: its 3 controls pooled), the others per
     control. `lang_of` = {stimulus_id: passage language}."""
     d = pd.read_parquet(Path(run_dir) / "details", columns=["stimulus_id", "question_key", "direction", "kind",
@@ -371,8 +372,8 @@ def main() -> None:
         "to rounding. Only label_to_present differs by direction. Log-probabilities are stored in 16-bit, whose "
         "steps are up to 0.03 at these sizes; on the bf16 27B model, rounding inside the network can add more "
         "(the stored margins and flips are computed in 32-bit before storage).", *direction_lines,
-        "- Each control's measured edit size vs the treatment's (same prompt and direction; mean over planned "
-        "positions x layers):", *size_lines,
+        "- Each control's edit size vs the treatment's (same prompt and direction; mean over planned "
+        "positions x layers; sizes of the clamp on the clean run, see methods.md Section 5):", *size_lines,
         "- NOT checked: any scientific reading of these numbers.", "",
         "## 3. Figures",
         f"- {len(written)} figure files in {run.dir}/figures/png/: panel_c, margin_vs_deltac_<question>, "
