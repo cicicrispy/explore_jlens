@@ -11,12 +11,13 @@ run first and read its summary; only then launch the ANOMALY run (it refuses unl
 run is finished and used the same M2 run, band and position set). The decision is yours -- no code
 applies a threshold.
 
-A positives run first PICKS THE CONTROL TOKENS automatically (src/jlens_spec/controls.py -- no
-human review), from the M2 run's saved top-100 readout plus one clean pass over all 64 prompts, and
-saves them in controls/ before any cell runs; its anomaly run reuses them. Then, for every prompt
-of the run's questions and both directions: identity, swap (the treatment), random_direction, and
-3 label_to_present + 3 big_nonlabel cells (one per control) = 18 cells per prompt. Per prompt, in
-files named <stimulus>_<question>.parquet:
+The control tokens are picked BEFORE the positives run, by a controls run (scripts/m3_controls.py),
+which stops so you can read them. The positives run names the controls run you accepted
+(`controls_run:`), refuses it unless it is finished and matches this run (controls.selection_problems
+-- the code version is not compared), and copies its selection.yaml into controls/; the anomaly run
+reuses that copy. Then, for every prompt of the run's questions and both directions: identity, swap
+(the treatment), random_direction, and 3 label_to_present + 3 big_nonlabel cells (one per control) =
+18 cells per prompt. Per prompt, in files named <stimulus>_<question>.parquet:
     records/   one row per cell (margin, flip, top-100 next tokens, full-vocab logprobs fp16, logs)
     details/   per cell x band layer x position: where the stream ACTUALLY changed + the planned log
     tokens/    the prompt's tokens, classes, and which positions the position set plans to edit
@@ -25,6 +26,7 @@ RESUMES an unfinished run (only if the code is unchanged -- see runs.start_or_re
 lands outside its planned positions stops the run (hard failure). Figures and summary.md come last,
 from the saved files only; the summary figures are uploaded with the run, the mask figures never.
 
+    python scripts/m3_controls.py --experiment configs/experiments/m3_controls_question.yaml
     python scripts/m3_grid.py --experiment configs/experiments/m3_positives_question.yaml
     python scripts/m3_grid.py --experiment configs/experiments/m3_anomaly_question.yaml
     python scripts/m3_grid.py --experiment ... --fresh | --resume runs/M3/<run folder>
@@ -57,140 +59,12 @@ from jlens_spec import runner  # noqa: E402
 from jlens_spec import runs as runs_mod  # noqa: E402
 
 FOLDERS = ("records", "details", "tokens")
-CONTROL_FILES = ("controls/selection.yaml", "controls/candidates.parquet", "controls/pairs.parquet")
-
-
-def _py(v):
-    """numpy scalars/arrays -> plain Python, for yaml."""
-    if isinstance(v, dict):
-        return {str(k): _py(x) for k, x in v.items()}
-    if isinstance(v, (list, tuple, np.ndarray)):
-        return [_py(x) for x in v]
-    if isinstance(v, np.generic):
-        return v.item()
-    if isinstance(v, float) and v != v:
-        return None
-    return v
-
-
-def _float32(df: pd.DataFrame) -> pd.DataFrame:
-    """The control tables are stored in 32-bit floats (half the size; 7 significant digits is plenty)."""
-    return df.astype({c: "float32" for c in df.select_dtypes("float64").columns})
-
-
-def _entry(i: int, row: dict, checks: list[str], fields: tuple) -> dict:
-    """One picked control for selection.yaml: its summary fields, then its value of each `fields`
-    entry in every check nested under per_check (so the file stays readable with 16 checks)."""
-    per = {f"{f}_{k}" for f in fields for k in checks}
-    out = {"control_index": i, **{k: v for k, v in row.items() if k not in per}}
-    out["per_check"] = {k: {f: row[f"{f}_{k}"] for f in fields} for k in checks}
-    return out
-
-
-def _select_controls(run, exp, model, lens, stim, fmt, tokens_raw, pair_words, band_layers, m2_dir, store):
-    """Pick the controls (controls.py) and save them in controls/. Returns the selection dict."""
-    c = exp["controls"]
-    classes = prompts_mod.POSITION_SETS[exp["position_set"]]
-    tok = model.tokenizer
-    questions = list(stim["questions"])
-    stimuli = {s["id"]: s for s in stim["passages"]}
-    keys = [(s["id"], q) for s in stim["passages"] for q in questions]
-    for sid, q in keys:
-        pipeline.fetch(m2_dir / "topk" / f"{sid}_{q}.parquet", store)
-    topk = pq.read_table(m2_dir / "topk", columns=["stimulus_id", "question_key", "pos", "class", "layer", "topk_ids"],
-                         filters=[("layer", "in", band_layers), ("class", "in", list(classes))])
-    cov = controls_mod.coverage(topk, classes, band_layers, exp["skip_first"], c["pool_k"])
-    groups = [controls_mod.group_name(stimuli[sid]["matrix_lang"], q) for sid, q in keys]
-    by_group = {}
-    for g, key in zip(groups, keys):
-        by_group.setdefault(g, []).append(key)
-    cov_group = controls_mod.coverage_by_group(cov, by_group, len(band_layers))
-
-    info = controls_mod.classify_tokens(sorted(cov["token_id"].unique()), tok, tokens_raw["controls"]["control_ineligible"])
-    eligible = info[info["excluded_reason"] == ""].reset_index(drop=True)
-    pair_ids = [tok.encode(w, add_special_tokens=False)[0] for w in pair_words]
-    cands, treat = controls_mod.with_coverage(eligible, cov_group, pair_words, pair_ids, questions)
-    pool = controls_mod.big_nonlabel_pool(cands, treat, c["pair_pool"], c["bars"])
-
-    prompts, masks = [], []
-    for sid, q in keys:
-        p = prompts_mod.build_prompt(stimuli[sid], q, fmt)
-        prompts.append(p)
-        masks.append(prompts_mod.mask(p, set(classes), skip_first=exp["skip_first"]))
-    print(f"      clean pass over {len(prompts)} prompts: |Δc| and direction for {len(cands)} label_to_present "
-          f"candidates (picked separately for each of the {len(treat)} row x question checks, lowering the label), "
-          f"lens distances for {len(pool) * (len(pool) - 1) // 2} big_nonlabel pairs (one set, every check) ...",
-          flush=True)
-    est = controls_mod.estimate_delta_c(model, lens, prompts, masks, band_layers, cands["token_id"].tolist(),
-                                        pair_ids, pool["token_id"].tolist())
-    cands, treat, pair_tab = controls_mod.with_delta_c(cands, treat, est, groups, pair_words,
-                                                       pool["token_id"].tolist(), c["norm_scale"])
-    ltp = controls_mod.select_label_to_present(cands, treat, c["n_per_kind"], c["bars"])
-    bn = controls_mod.select_big_nonlabel(pool, pair_tab, treat, c["n_per_kind"], c["bars"])
-    if any(df.empty for df in ltp.values()) or bn.empty:
-        raise SystemExit("a label_to_present or big_nonlabel control could not be formed at all (no eligible "
-                         "candidate) -- a treatment without its controls breaks invariant 7")
-
-    (run.dir / "controls").mkdir(exist_ok=True)
-    excluded = info[info["excluded_reason"] != ""]
-    io_mod.write_parquet(_float32(pd.concat([cands, excluded], ignore_index=True)),
-                         run.dir / "controls" / "candidates.parquet")
-    io_mod.write_parquet(_float32(pair_tab), run.dir / "controls" / "pairs.parquet")
-    checks = list(treat)
-    selection = {
-        "selection_version": controls_mod.SELECTION_VERSION,
-        "picked_by_run": run.run_id, "position_set": exp["position_set"], "position_classes": list(classes),
-        "band": exp["band"], "band_layers": band_layers, "skip_first": exp["skip_first"],
-        "from_m2_run": m2_dir.name, "pair_words": list(pair_words), "pool_k": c["pool_k"],
-        "bars": c["bars"], "pair_pool": c["pair_pool"], "norm_scale": c["norm_scale"],
-        "checks": treat,
-        # per check: the n tokens that check's label_to_present cells use
-        "label_to_present": {k: [{"control_index": i, **r} for i, r in enumerate(df.to_dict("records"))]
-                             for k, df in ltp.items()},
-        "big_nonlabel": [_entry(i, r, checks, ("dc", "dc_ratio")) for i, r in enumerate(bn.to_dict("records"))],
-        "never_in_top": controls_mod.never_in_top(treat),
-        "n_candidates_eligible": int(len(cands)),
-        "excluded_counts": excluded["excluded_reason"].value_counts().to_dict(),
-        "excluded_special": excluded[excluded["excluded_reason"].isin(
-            ["special token", "does not re-tokenize to itself"])][["token_id", "token", "excluded_reason"]]
-        .to_dict("records"),
-    }
-    with open(run.dir / "controls" / "selection.yaml", "w") as f:
-        yaml.safe_dump(_py(selection), f, sort_keys=False, allow_unicode=True)
-    return yaml.safe_load((run.dir / "controls" / "selection.yaml").read_text())
+SELECTION = "controls/selection.yaml"   # a positives run's copy of its controls run's selection
 
 
 def _run_checks(selection, questions) -> list[str]:
     """The checks (row x question) whose cells this run makes."""
     return [k for k, t in selection["checks"].items() if t["question"] in questions]
-
-
-def _control_lines(selection, questions) -> list[str]:
-    """The picked controls for the log and the summary: label_to_present one line per check of this
-    run (its own tokens), big_nonlabel one line per pair (shared by every check)."""
-    n = len(selection["checks"])
-
-    def cov(v) -> str:
-        return "coverage: no bar (the treatment tokens are never in the top-100 here)" if v == float("inf") \
-            else f"coverage {v:.2f}x"
-
-    lines = []
-    for k in _run_checks(selection, questions):
-        picks = "; ".join(f"{c['token']!r} ({c['tier_label']}, |Δc| {c['dc_ratio']:.2f}x, {cov(c['cov_ratio'])})"
-                          for c in selection["label_to_present"][k])
-        lines.append(f"  - label_to_present, {k}: {picks}")
-    lines += [f"  - big_nonlabel[{c['control_index']}]: {c['a_token']!r} <-> {c['b_token']!r}, tier {c['tier_label']} "
-              f"-- lowest over the {n} checks: |Δc| after scaling {c['dc_ratio_worst']:.3f}x the treatment's, "
-              f"{cov(c['cov_ratio_worst'])}" for c in selection["big_nonlabel"]]
-    return lines
-
-
-def _require_current_selection(selection, where: str) -> None:
-    """A controls/selection.yaml written by older code has another layout -- never reuse it."""
-    if selection.get("selection_version") != controls_mod.SELECTION_VERSION:
-        raise SystemExit(f"{where}: its controls/selection.yaml was written by older code (selection_version "
-                         f"{selection.get('selection_version')}, expected {controls_mod.SELECTION_VERSION}), so its "
-                         "controls were picked by other rules -- start a new positives run (--fresh).")
 
 
 def _cells(exp, stim, pair_name, band_layers, selection) -> list:
@@ -280,20 +154,28 @@ def _size_checks(run_dir, lang_of: dict) -> tuple[pd.DataFrame, list[str]]:
 
 
 def _check_experiment(exp, path, store, run=None, resumed=False):
-    """Refuse bad references before any work: the M1 run passed (real runs), the M2 run (and, for an
-    anomaly run, the positives run) exists and is finished. Returns (positives?, the M1 summary
-    line, M2 run name, positives run name or None). With `run`, the resolved names are saved in the
-    run's refs.yaml the first time and read back on resume, so a resumed run keeps pointing at the
-    runs it started with (a dry run's "latest:" could otherwise pick a newer one)."""
+    """Refuse bad references before any work: the M1 run passed (real runs), the M2 run and -- for a
+    positives run -- the controls run, or -- for an anomaly run -- the positives run exist and are
+    finished. Returns (positives?, the M1 summary line, M2 run name, controls run name or None,
+    positives run name or None). With `run`, the resolved names are saved in the run's refs.yaml the
+    first time and read back on resume, so a resumed run keeps pointing at the runs it started with
+    (a dry run's "latest:" could otherwise pick a newer one)."""
+    if "controls" in exp:
+        raise SystemExit(f"{path} has a `controls:` block: the controls are picked by scripts/m3_controls.py now "
+                         "(its own experiment file, e.g. m3_controls_question.yaml); a positives run names the "
+                         "controls run you accepted in `controls_run:`")
     positives = "positives_run" not in exp
-    if positives == ("controls" not in exp):
-        raise SystemExit(f"{path}: a positives run has a `controls:` block, an anomaly run a `positives_run:` "
+    if positives != ("controls_run" in exp):
+        raise SystemExit(f"{path}: a positives run has `controls_run:`, an anomaly run `positives_run:` "
                          "-- exactly one of the two")
     if exp["position_set"] not in prompts_mod.POSITION_SETS:
         raise SystemExit(f"position_set must be one of {sorted(prompts_mod.POSITION_SETS)}")
     m1_line = pipeline.check_m1_passed(exp, store)
     if not exp.get("from_m2_run"):
         raise SystemExit("set from_m2_run in the experiment file (the finished M2 run, runs/M2/<this>)")
+    if positives and not exp.get("controls_run"):
+        raise SystemExit("set controls_run in the experiment file (the scripts/m3_controls.py run of this position "
+                         "set whose picks you accepted, runs/M3/<this>)")
     if not positives and not exp.get("positives_run"):
         raise SystemExit("set positives_run in the experiment file (this position set's finished positives run)")
     refs_path = run.dir / "refs.yaml" if run is not None else None
@@ -301,14 +183,17 @@ def _check_experiment(exp, path, store, run=None, resumed=False):
         refs = yaml.safe_load(pipeline.fetch(refs_path, store).read_text())
     else:
         refs = {"from_m2_run": pipeline.resolve_run(exp["from_m2_run"], "M2", exp, store),
+                "controls_run": pipeline.resolve_run(exp["controls_run"], "M3", exp, store) if positives else None,
                 "positives_run": None if positives else pipeline.resolve_run(exp["positives_run"], "M3", exp, store)}
         if refs_path is not None:
             refs_path.write_text(yaml.safe_dump(refs))
     root = pipeline.runs_root(exp)
     pipeline.require_finished(root / "M2" / refs["from_m2_run"], store, "M2 run")
+    if refs["controls_run"]:
+        pipeline.require_finished(root / "M3" / refs["controls_run"], store, "controls run")
     if refs["positives_run"]:
         pipeline.require_finished(root / "M3" / refs["positives_run"], store, "positives run")
-    return positives, m1_line, refs["from_m2_run"], refs["positives_run"]
+    return positives, m1_line, refs["from_m2_run"], refs["controls_run"], refs["positives_run"]
 
 
 def main() -> None:
@@ -334,7 +219,7 @@ def main() -> None:
     run, resumed = runs_mod.start_or_resume("M3", args.experiment, pipeline.settings_files(exp0), store,
                                             root=root, fresh=args.fresh, resume=args.resume)
     exp = run.experiment
-    positives, m1_line, m2_run, pos_run = _check_experiment(exp, args.experiment, store, run, resumed)
+    positives, m1_line, m2_run, ctl_run, pos_run = _check_experiment(exp, args.experiment, store, run, resumed)
     m2_dir = root / "M2" / m2_run
     model_cfg, lens_cfg, tokens_raw = run.load("model.yaml"), run.load("lens.yaml"), run.load("tokens.yaml")
     stim, prompt_format, bands = run.load("stimuli.json"), run.load("prompt_format.yaml"), run.load("bands.yaml")
@@ -350,29 +235,27 @@ def main() -> None:
     fmt = prompts_mod.make_fmt(tok, stim, prompt_format)
 
     print("[2/5] Control tokens ...", flush=True)
-    sel_path = run.dir / "controls" / "selection.yaml"
+    # A positives run takes the selection of the controls run it names (resumed or not: refs.yaml pins
+    # that run) and keeps a copy in its own controls/; an anomaly run takes its positives run's copy.
+    # Either must match this run's settings; the code version is not compared (selection_problems).
+    source = ctl_run if positives else pos_run
+    selection = yaml.safe_load(pipeline.fetch(root / "M3" / source / SELECTION, store).read_text())
+    problems = controls_mod.selection_problems(
+        selection, position_set=exp["position_set"], band_layers=band_layers, from_m2_run=m2_run,
+        pair_words=pair_words, skip_first=exp["skip_first"])
+    if problems:
+        raise SystemExit(f"{'controls' if positives else 'positives'} run {source} can't be used by this run: "
+                         + "; ".join(problems))
     if positives:
-        # A resumed run keeps the controls it picked when it started (its earlier cells used them),
-        # even if they never reached the store: the file is written atomically, so it is complete.
-        if resumed and (sel_path.exists() or store.exists(sel_path)):
-            selection = yaml.safe_load(pipeline.fetch(sel_path, store).read_text())
-            _require_current_selection(selection, f"resumed run {run.run_id}")
-            print("      reusing the controls this run already picked (controls/selection.yaml)", flush=True)
-        else:
-            selection = _select_controls(run, exp, model, lens, stim, fmt, tokens_raw, pair_words, band_layers,
-                                         m2_dir, store)
-        controls_source = "picked by this run (controls/selection.yaml)"
+        selection = {**selection, "controls_run": ctl_run}
+        (run.dir / "controls").mkdir(exist_ok=True)
+        with open(run.dir / SELECTION, "w") as f:
+            yaml.safe_dump(selection, f, sort_keys=False, allow_unicode=True)
+        controls_source = f"from controls run {ctl_run} (scripts/m3_controls.py), named in the experiment file"
     else:
-        pos_dir = root / "M3" / pos_run
-        selection = yaml.safe_load(pipeline.fetch(pos_dir / "controls" / "selection.yaml", store).read_text())
-        _require_current_selection(selection, f"positives run {pos_run}")
-        mismatch = {k: (selection[k], v) for k, v in (("position_set", exp["position_set"]), ("band_layers", band_layers),
-                                                        ("from_m2_run", m2_run), ("pair_words", pair_words),
-                                                        ("skip_first", exp["skip_first"])) if selection[k] != v}
-        if mismatch:
-            raise SystemExit(f"positives run {pos_run} used different settings -- (positives, this run): {mismatch}")
-        controls_source = f"reused from positives run {pos_run}"
-    ctl_lines = _control_lines(selection, exp["questions"])
+        controls_source = (f"reused from positives run {pos_run}, which took them from controls run "
+                           f"{selection.get('controls_run')}")
+    ctl_lines = controls_mod.control_lines(selection, exp["questions"])
     print("\n".join(ctl_lines), flush=True)
 
     cells = _cells(exp, stim, pair_name, band_layers, selection)
@@ -388,7 +271,7 @@ def main() -> None:
         "git_commit": git_commit,
     }
     uploader = io_mod.BackgroundUploader(run.dir, store=store)
-    uploader.trigger(files=[f for f in ("refs.yaml", *CONTROL_FILES) if (run.dir / f).exists()])
+    uploader.trigger(files=[f for f in ("refs.yaml", SELECTION) if (run.dir / f).exists()])
     print(f"[3/5] Cells: {len(groups) - len(todo)} of {len(groups)} prompts already done (in the {store.name}); "
           f"{len(todo)} to run, {len(cells) // len(groups)} cells each, layers {figures.layers_text(band_layers)} "
           f"({exp['band']}), position set '{exp['position_set']}' ...", flush=True)
@@ -474,7 +357,7 @@ def main() -> None:
         f"- position set: '{exp['position_set']}' = classes {list(prompts_mod.POSITION_SETS[exp['position_set']])}; "
         f"skip_first {exp['skip_first']}; alpha {exp['alpha']} (treatment); seed {exp['seed']}; directions {exp['directions']}",
         f"- questions: {exp['questions']}; dataset: {store.name}",
-        f"- controls ({controls_source}; no human review -- src/jlens_spec/controls.py):", *ctl_lines, "",
+        f"- controls ({controls_source}; rules: src/jlens_spec/controls.py):", *ctl_lines, "",
         "## 2. What passed by assertion / checked by eye / not checked",
         f"- Ran {len(rec)} cells (expected {expected_n} = {len(stim['passages'])} passages x {len(exp['questions'])} "
         f"questions x {len(exp['directions'])} directions x {cells_per_group} cells).",

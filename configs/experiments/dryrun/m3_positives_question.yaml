@@ -1,5 +1,5 @@
 # DRY RUN (Mac), chain 1: position set "question", contiguous band (workspace [9, 18]). Positives run:
-# picks the controls, then report + hello. Run after the dry M2 run.
+# report + hello, with the controls of the latest dry controls_question run. Run after that run.
 #
 #   python scripts/m3_grid.py --experiment configs/experiments/dryrun/m3_positives_question.yaml
 
@@ -9,17 +9,12 @@ questions: [report, hello]
 position_set: question
 band: workspace
 from_m2_run: latest:loading      # dry runs only: the most recent finished dry M2 run
+controls_run: latest:controls_question
 directions: [m2i, i2m]
 alpha: 1.0
 seed: 0
 skip_first: 0
 save_topk: 100
-controls:
-  n_per_kind: 3
-  bars: [1.0, 0.75]
-  pool_k: 100
-  pair_pool: 20
-  norm_scale: 1.0
 
 dryrun:
   store: runs/dryrun/_hf

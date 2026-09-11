@@ -218,16 +218,26 @@ positions, layers and prompt:
 Three label-to-present tokens (chosen per check, Section 6.1) and three big non-label pairs are used,
 each as its own cell.
 
-### 6.1 Automatic control selection
+### 6.1 Control selection
 
-The specification had control tokens proposed by a rule and approved by a human. In this project
-they are chosen **automatically, with no human review** (decided with the human), at the start of
-each position set's first M3 run, from the clean-pass data:
+As in the specification, control tokens are proposed by a rule and approved by a human. For each
+position set, a separate step (the *controls run*) applies the rule below to the clean-pass data and
+stops before any cell runs. The human reads every pick, the next three candidates of each check and
+every token the exclusion rules removed. If a pick carries language (for example a word of either
+language, or a place name), the human adds it to the blocklist and the step is run again; each
+attempt is kept as its own run. The accepted controls run is named in the position set's first M3
+run, which refuses it unless it used the same M2 run, band, position set, treatment pair and skipped
+positions (the code version that picked it is not compared). The rule:
 
 **Candidates.** Every token among the lens readout's top 100 at the positions the treatment edits,
 within the band, on any of the 64 prompts. Excluded: a blocklist of language-identity tokens in any
 script (`control_ineligible` in `configs/tokens.yaml`) and any token whose text contains one of them;
-tokenizer special tokens and tokens whose text does not re-tokenize to itself (these are listed
+the answer tokens (*Yes*, *No*, *Hola*, *Bonjour*, with and without a leading space), since swapping
+one in could move an answer directly; every token without a letter or a digit (punctuation, blank
+lines, symbols), odd tokens that can have large, unspecific effects; every token that occurs in the
+passages' own text, compared without leading spaces and ignoring case, since a word of either
+language would put a language back in; tokenizer special tokens and tokens whose text does not
+re-tokenize to itself (these are listed
 separately and never used).
 
 **Measures.** Both are computed within the band, at the edited positions:
@@ -269,8 +279,9 @@ the treatment is preferred: the smallest |log(|Δc| ratio)| (for big non-label, 
 checks). If a treatment token never appears in the top 100 at the edited positions in a check,
 coverage sets no bar there, and this is flagged in the run's summary.
 
-The selection, all candidates and all pairs are saved in the run folder (`controls/`); the second
-run of the position set reuses them. Each run's summary reports each control's **measured** edit
+The selection, all candidates and all pairs are saved in the controls run's folder (`controls/`); the
+position set's first M3 run keeps a copy of the selection and the second reuses it. Each run's
+summary reports each control's **measured** edit
 size relative to the treatment's (|Δc| and ‖Δh‖), since the clean-pass estimate cannot anticipate
 the effect of edits at earlier layers of the band.
 
@@ -356,19 +367,23 @@ answer (full log-probabilities, top 100, margin, correctness). Then:
   M3's treatment pair;
 - an accuracy table (answer-set argmax vs ground truth, per question).
 
-**M3 — the paper's protocol with controls (GPU).** Four runs, two position sets × two runs:
+**M3 — the paper's protocol with controls (GPU).** Four runs, two position sets × two runs, each
+position set preceded by its controls run (Section 6.1; it picks the control tokens and runs no
+cells):
 
 | run | questions | edits |
 |---|---|---|
+| controls, question | — (picks the controls) | the question sentence |
 | positives, question | report, hello | the question sentence |
 | anomaly, question | anomaly, content | the question sentence |
+| controls, message | — (picks the controls) | the whole user message |
 | positives, message | report, hello | the whole user message |
 | anomaly, message | anomaly, content | the whole user message |
 
 Band: workspace; α = 1; both directions. Per prompt and direction: identity, swap, random direction,
 3 label-to-present and 3 big non-label cells (9 cells; 18 per prompt), so 576 cells per run (16
-passages × 2 questions × 2 directions × 9). The positives run of a position set runs first and picks
-the controls; the human reads its summary and only then launches the anomaly run (hygiene
+passages × 2 questions × 2 directions × 9). The positives run of a position set runs first, with the
+controls the human accepted; the human reads its summary and only then launches the anomaly run (hygiene
 invariant 7's "if the positive controls don't flip, stop" — a human decision, no threshold in code).
 The anomaly run refuses to start unless its positives run is finished and used the same M2 run,
 band, position set and settings.
@@ -458,8 +473,8 @@ that. No hypothesis tests are run at this stage.
 | M1 positive control | — | edits every position (incl. the first), raw prompt | exactly as in the paper; this control only |
 | M3 position sets | question only | question **and** message | the paper's text says "across the question tokens", its figure panels "at every position"; both run |
 | Invariant 7's stop | positives before anomaly; stop if they don't flip | positives and anomaly as separate runs; the human reads the positives summary before the anomaly run | a human decision, no threshold |
-| Control tokens | proposed by rule, approved by a human | chosen automatically, no review (Section 6.1) | decided with the human |
-| Control pool | top-25 readout at question positions, frequency ≥ 0.5 | top-100 at the edited positions; a coverage bar replaces the frequency rule | wider pool; matched on coverage and size |
+| Control tokens | proposed by rule in M2, approved by a human, copied into `tokens.yaml` | proposed by rule in a separate controls run per position set, read by the human, who extends the blocklist and re-picks if needed; the accepted run is named in the first M3 run (Section 6.1) | the picks depend on the band and the positions, known only per position set; each attempt stays on record |
+| Control pool | top-25 readout at question positions, frequency ≥ 0.5 | top-100 at the edited positions; a coverage bar replaces the frequency rule; answer tokens, punctuation and the passages' own words excluded | wider pool; matched on coverage and size; no control may carry language or an answer, or be an odd punctuation token |
 | Control matching | label-to-present: the most frequent eligible token loading below the label; big non-label: the two eligible tokens with the highest mean loading | matched to the treatment on coverage and \|Δc\|: label-to-present per row × question check, among tokens that lower the label there; big non-label one set for all 16 checks, judged on its \|Δc\| after scaling | controls should do what the treatment does, in size and reach |
 | Directions | m2i and i2m | both kept, though swap / big non-label / random are the same edit in both | the literal grid; agreement reported |
 | M2 layers | the workspace band | every lens layer (bands still used for scores) | record everything once |
@@ -507,6 +522,13 @@ All dates 2026-09-11 unless noted.
 - While writing this document: the size-only rule could pick a label-to-present token that *raises*
   the label (|Δc| does not see the direction). Label-to-present is now picked separately for each of
   the 16 checks, among tokens that lower the removed label in that check.
+- After the dry run with the per-check rule: automatic picks included words of the two languages
+  (*también*, *peux*, *sous*, *ellos*) and *Madrid*, which the blocklist of language names does not
+  catch. Control selection moved to a separate controls run that stops for the human's review (the
+  specification's approval step, restored); the answer tokens, every token without a letter or a
+  digit (punctuation, blank lines, symbols) and the passages' own words are now excluded
+  automatically. The code version that picked the controls is not compared with the M3
+  run's, so controls can be picked again after M2.
 - Figures: M3 summary and combined figures uploaded to the dataset, mask figures and M2 figures not;
   added the flip heatmap, the margin change and the M2 rank heatmaps; panel c kept exactly as
   specified.

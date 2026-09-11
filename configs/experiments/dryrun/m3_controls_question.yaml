@@ -1,0 +1,22 @@
+# DRY RUN (Mac), chain 1: position set "question", band workspace [9, 18]. Controls run: picks the
+# control tokens and stops. Run after the dry M2 run, before m3_positives_question.yaml.
+#
+#   python scripts/m3_controls.py --experiment configs/experiments/dryrun/m3_controls_question.yaml
+
+name: controls_question
+milestone: M3
+position_set: question
+band: workspace
+from_m2_run: latest:loading      # dry runs only: the most recent finished dry M2 run
+skip_first: 0
+controls:
+  n_per_kind: 3
+  bars: [1.0, 0.75]
+  pool_k: 100
+  pair_pool: 20
+  norm_scale: 1.0
+
+dryrun:
+  store: runs/dryrun/_hf
+  lens_seed: 0
+  bands_file: configs/experiments/dryrun/bands.yaml

@@ -71,12 +71,83 @@ def test_special_and_non_roundtrip_tokens_are_kept_apart(standin_model):
     special = tok.all_special_ids[0]
     odd = next(i for i in range(1000) if tok.encode(tok.decode([i]), add_special_tokens=False) != [i])
     ids = [special, odd] + [tok.encode(t, add_special_tokens=False)[0] for t in (" Spanish", " and", " house")]
-    info = controls.classify_tokens(ids, tok, [" Spanish", "an"]).set_index("token_id")["excluded_reason"]
+    info = controls.classify_tokens(ids, tok, [" Spanish", "an"], answer_ids=[], passage_words=set()) \
+        .set_index("token_id")["excluded_reason"]
     assert info[special] == "special token"
     assert info[odd] == "does not re-tokenize to itself"
     assert info[ids[2]] == "control_ineligible"
     assert info[ids[3]] == "contains a language name"   # " and" contains the blocklisted "an"
     assert info[ids[4]] == ""
+
+
+class _FakeTok:
+    """A tokenizer whose vocabulary is a fixed list of strings, each one token (all classify_tokens and
+    metrics.answer_ids use) -- so these tests don't depend on how a real tokenizer splits words."""
+    all_special_ids = [0]
+    added_tokens_decoder = {}
+
+    def __init__(self, vocab):
+        self.vocab, self.ids = vocab, {t: i for i, t in enumerate(vocab)}
+
+    def decode(self, ids):
+        return "".join(self.vocab[i] for i in ids)
+
+    def encode(self, text, add_special_tokens=False):
+        return [self.ids[text]] if text in self.ids else [len(self.vocab)]
+
+
+def test_passage_words_are_excluded_whatever_the_case_or_leading_space():
+    from types import SimpleNamespace
+
+    tok = _FakeTok(["<s>", " sous", "sous", " Sous", "SOUS", " le", " ciel", " cielo", " maison", " Is", ".", " ."])
+    i = tok.ids
+    # one prompt: ' sous le ciel.' in the passage, ' Is' in the question
+    prompt = SimpleNamespace(input_ids=[i[" Is"], i[" sous"], i[" le"], i[" ciel"], i["."]],
+                             classes=["question", "matrix", "intrusion", "matrix", "matrix"])
+    words = controls.passage_words([prompt], tok)
+    assert words == {"sous", "le", "ciel"}      # not the question's ' Is'; not '.' (punctuation has its own rule)
+    info = controls.classify_tokens([i[t] for t in (" sous", "sous", " Sous", "SOUS", " cielo", " maison", " Is")],
+                                    tok, [], answer_ids=[], passage_words=words).set_index("token")["excluded_reason"]
+    assert all(info[t] == "occurs in the passages" for t in (" sous", "sous", " Sous", "SOUS"))
+    assert info[" cielo"] == "" and info[" maison"] == "" and info[" Is"] == ""   # whole words only, passage only
+
+
+def test_tokens_without_a_letter_or_digit_are_excluded():
+    punct = [".", " .", "\n", "\n\n", "...", '!");\n\n', "？\n\n", " —"]
+    kept = [" 2019", "3", " a", "é", "大", " x."]
+    tok = _FakeTok(["<s>"] + punct + kept)
+    info = controls.classify_tokens(list(range(1, len(tok.vocab))), tok, [], answer_ids=[], passage_words=set()) \
+        .set_index("token")["excluded_reason"]
+    assert all(info[t] == controls.NO_LETTER_OR_DIGIT for t in punct)   # punctuation, blank lines, symbols
+    assert all(info[t] == "" for t in kept)                              # a digit or a letter (any script) is enough
+
+
+def test_answer_tokens_are_excluded():
+    from jlens_spec import metrics
+
+    tok = _FakeTok(["<s>", "Yes", " Yes", "No", " No", "Hola", " Hola", "Bonjour", " Bonjour", " yes", " house"])
+    ids = metrics.answer_ids(tok, ["Yes", "No", "Hola", "Bonjour"])
+    info = controls.classify_tokens(list(range(1, len(tok.vocab))), tok, [], answer_ids=ids, passage_words=set()) \
+        .set_index("token")["excluded_reason"]
+    assert all(info[t] == "answer token" for t in ("Yes", " Yes", "No", " No", "Hola", " Hola", "Bonjour", " Bonjour"))
+    assert info[" yes"] == "" and info[" house"] == ""    # only the answers' own forms (with/without the space)
+
+
+def test_selection_check_refuses_each_mismatch_but_accepts_other_code():
+    settings = dict(position_set="question", band_layers=[9, 10], from_m2_run="loading_1",
+                    pair_words=[" Spanish", " French"], skip_first=0)
+    sel = {"selection_version": controls.SELECTION_VERSION, "git_commit": "aaa", **settings}
+    assert controls.selection_problems(sel, **settings) == []
+    # picked with other code (e.g. controls picked again after a commit): not compared
+    assert controls.selection_problems({**sel, "git_commit": "bbb-dirty-0123456789ab"}, **settings) == []
+    for key, other in (("position_set", "message"), ("band_layers", [9, 11]), ("from_m2_run", "loading_2"),
+                       ("pair_words", ["Spanish", "French"]), ("skip_first", 4)):
+        problems = controls.selection_problems(sel, **{**settings, key: other})
+        assert len(problems) == 1 and problems[0].startswith(key)
+    old = controls.selection_problems({**sel, "selection_version": controls.SELECTION_VERSION - 1}, **settings)
+    assert len(old) == 1 and old[0].startswith("selection_version")
+    with pytest.raises(ValueError):
+        controls.selection_problems(sel, position_set="question")      # every setting must be given
 
 
 def _treat(cov_in=0.5, cov_out=0.5, dc=1.0):

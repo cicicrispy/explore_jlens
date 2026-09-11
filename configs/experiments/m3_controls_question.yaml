@@ -1,0 +1,26 @@
+# M3 (Phase B, GPU), position set "question" -- CONTROLS run: picks the control tokens by rule
+# (src/jlens_spec/controls.py) and STOPS; no cell runs. Read its summary. If a pick carries language,
+# extend controls.control_ineligible in configs/tokens.yaml, commit, and run this again (a new run
+# folder). Put the run you accept into controls_run: of m3_positives_question.yaml. Hand-written;
+# copied into the run folder's settings/.
+#
+#   python scripts/m3_controls.py --experiment configs/experiments/m3_controls_question.yaml
+
+name: controls_question    # run folders: runs/M3/controls_question_<UTC start time>/
+milestone: M3
+
+position_set: question     # must match the positives and anomaly runs that use these controls
+band: workspace
+
+# REQUIRED: folder names of finished runs.
+from_m2_run: null          # runs/M2/<this>/: the treatment pair (pair_score argmax) + the control pool
+m1_validate_run: null      # runs/M1/<this>/: must have passed
+
+skip_first: 0              # must match the positives and anomaly runs
+
+controls:                  # rules: src/jlens_spec/controls.py
+  n_per_kind: 3            # label_to_present targets and big_nonlabel pairs, each its own cell
+  bars: [1.0, 0.75]        # >= 100% of the treatment's layer coverage and |delta c|; else >= 75%; else the closest
+  pool_k: 100              # candidates = the top-100 lens readout (the spec's 25 is superseded)
+  pair_pool: 20            # big_nonlabel pairs are formed from the 20 members with the widest coverage
+  norm_scale: 1.0          # big_nonlabel / random_direction edits are scaled to norm_scale x the treatment's ||delta h||

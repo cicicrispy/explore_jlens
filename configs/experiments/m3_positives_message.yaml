@@ -5,7 +5,8 @@
 #
 #   python scripts/m3_grid.py --experiment configs/experiments/m3_positives_message.yaml
 #
-# This run picks its own control tokens (from the message positions) and saves them in controls/.
+# The control tokens come from the controls run you accepted (scripts/m3_controls.py with
+# m3_controls_message.yaml); this run copies them into its controls/ folder and the anomaly run reuses them.
 
 name: positives_message    # run folders: runs/M3/positives_message_<UTC start time>/
 milestone: M3
@@ -16,6 +17,7 @@ band: workspace
 
 # REQUIRED: folder names of finished runs.
 from_m2_run: null
+controls_run: null         # runs/M3/<this>/, e.g. controls_message_20260912-031000
 m1_validate_run: null
 
 directions: [m2i, i2m]
@@ -23,10 +25,3 @@ alpha: 1.0
 seed: 0
 skip_first: 0
 save_topk: 100
-
-controls:
-  n_per_kind: 3
-  bars: [1.0, 0.75]
-  pool_k: 100
-  pair_pool: 20
-  norm_scale: 1.0

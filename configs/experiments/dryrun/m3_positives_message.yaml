@@ -1,5 +1,6 @@
 # DRY RUN (Mac), chain 2: position set "message", SPLIT band (early_late [[9, 13], [16, 18]] -- to show
-# a band of two blocks works). Positives run: picks the controls, then report + hello.
+# a band of two blocks works). Positives run: report + hello, with the controls of the latest dry
+# controls_message run.
 #
 #   python scripts/m3_grid.py --experiment configs/experiments/dryrun/m3_positives_message.yaml
 
@@ -9,17 +10,12 @@ questions: [report, hello]
 position_set: message
 band: early_late                 # dry run only -- the real M3 runs use the workspace band
 from_m2_run: latest:loading
+controls_run: latest:controls_message
 directions: [m2i, i2m]
 alpha: 1.0
 seed: 0
 skip_first: 0
 save_topk: 100
-controls:
-  n_per_kind: 3
-  bars: [1.0, 0.75]
-  pool_k: 100
-  pair_pool: 20
-  norm_scale: 1.0
 
 dryrun:
   store: runs/dryrun/_hf

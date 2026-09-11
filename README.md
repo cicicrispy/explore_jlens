@@ -13,7 +13,8 @@ As of 2026-09-11 (you run everything yourself and report back; the assistant wri
   the OLD prompt (no wrapper); **re-run `scripts/m1_tokens.py`** now that the prompt matches the paper
   (see "Prompt format"). The GPU steps (`download.py`, `m1_validate.py`) have **not** run yet.
 - **M2, M3: code written (stage 3), not executed.** Run folders, one file per prompt, uploads as each
-  prompt finishes, resume, automatic controls, two position sets, a Mac dry run.
+  prompt finishes, resume, controls picked by rule in a separate step you review, two position sets,
+  a Mac dry run.
 
 See "Known open items" below for things that still need your input.
 
@@ -215,30 +216,47 @@ About 0.5 GB per run, mostly `topk/`. Control tokens are **not** picked in M2 (s
 
 ## M3 (Phase B -- after M2)
 
-Four runs -- two **position sets** (which tokens are edited) x {positives, anomaly}:
+Per **position set** (which tokens are edited), three steps: a controls run that picks the control
+tokens and stops, then a positives run, then an anomaly run:
 
-| Experiment file | Questions | Edits | Run folder |
-|---|---|---|---|
-| `m3_positives_question.yaml` | report, hello | the question sentence | `runs/M3/positives_question_<time>/` |
-| `m3_anomaly_question.yaml` | anomaly, content | the question sentence | `runs/M3/anomaly_question_<time>/` |
-| `m3_positives_message.yaml` | report, hello | every token of the user message | `runs/M3/positives_message_<time>/` |
-| `m3_anomaly_message.yaml` | anomaly, content | every token of the user message | `runs/M3/anomaly_message_<time>/` |
+| Experiment file | Script | Questions | Edits | Run folder |
+|---|---|---|---|---|
+| `m3_controls_question.yaml` | `m3_controls.py` | (picks controls, no cells) | the question sentence | `runs/M3/controls_question_<time>/` |
+| `m3_positives_question.yaml` | `m3_grid.py` | report, hello | the question sentence | `runs/M3/positives_question_<time>/` |
+| `m3_anomaly_question.yaml` | `m3_grid.py` | anomaly, content | the question sentence | `runs/M3/anomaly_question_<time>/` |
+| `m3_controls_message.yaml` | `m3_controls.py` | (picks controls, no cells) | every token of the user message | `runs/M3/controls_message_<time>/` |
+| `m3_positives_message.yaml` | `m3_grid.py` | report, hello | every token of the user message | `runs/M3/positives_message_<time>/` |
+| `m3_anomaly_message.yaml` | `m3_grid.py` | anomaly, content | every token of the user message | `runs/M3/anomaly_message_<time>/` |
 
 ```bash
+python scripts/m3_controls.py --experiment configs/experiments/m3_controls_question.yaml
+# read runs/M3/controls_question_<time>/summary.md; if a pick carries language, extend
+# controls.control_ineligible in configs/tokens.yaml, commit, and run it again. Then put the accepted
+# run's folder name into controls_run: of m3_positives_question.yaml and:
 python scripts/m3_grid.py --experiment configs/experiments/m3_positives_question.yaml
 # read runs/M3/positives_question_<time>/summary.md -- then, if you decide to continue:
 python scripts/m3_grid.py --experiment configs/experiments/m3_anomaly_question.yaml
 ```
 
-Fill `from_m2_run` and `m1_validate_run` (and, in the anomaly files, `positives_run`) with folder
-names first. **Hygiene invariant 7's "positive controls first; if they don't flip, stop"** is your
-decision between the two runs: the anomaly run refuses to start unless its positives run is finished
-and used the same M2 run, band, position set and `skip_first`. No code applies a threshold.
+Fill `from_m2_run` and `m1_validate_run` (and `controls_run` in the positives files, `positives_run`
+in the anomaly files) with folder names first. **Hygiene invariant 7's "positive controls first; if
+they don't flip, stop"** is your decision between the two runs: the anomaly run refuses to start
+unless its positives run is finished and used the same M2 run, band, position set and `skip_first`.
+No code applies a threshold.
 
-**Controls are picked automatically** (no review) at the start of each positives run and saved in
-its `controls/` folder (`selection.yaml`, `candidates.parquet`, `pairs.parquet`); the anomaly run
-reuses them. The rules are in `src/jlens_spec/controls.py` (module docstring): candidates come from
-M2's top-100 readout at the positions the treatment edits, within the band. There are **16 checks**
+**Controls are picked by rule, and you read them before any cell runs.** `scripts/m3_controls.py`
+picks them and saves them in its run's `controls/` folder (`selection.yaml`, `candidates.parquet`,
+`pairs.parquet`), uploads the run and stops. Its summary lists every pick, the next 3 candidates of
+each check (what would probably replace a pick you exclude), and every token the exclusion rules
+removed. Your lever is `controls.control_ineligible` in `configs/tokens.yaml`: extend it, commit, and
+run the controls step again (a new run folder; the rejected one stays as a record). The positives run
+names the controls run you accepted (`controls_run:`), refuses it unless it is finished and matches
+the positives run's M2 run, band, position set, treatment pair and `skip_first` -- the code version is
+**not** compared, so the controls can be picked again after M2 or after other commits -- and copies
+its `selection.yaml` into its own `controls/`; the anomaly run reuses that copy. A change of the rules
+themselves bumps `SELECTION_VERSION` in `controls.py`, and older selections are refused. The rules are
+in `src/jlens_spec/controls.py` (module docstring): candidates come from M2's top-100 readout at the
+positions the treatment edits, within the band. There are **16 checks**
 (4 treatment rows -- passage language x direction -- x 4 questions; each averages over its 8
 passages, the edited positions and the band's layers). A control must reach at least 100% of the
 treatment's layer coverage and |Δc|, else at least 75%, else the closest remaining (flagged "below
@@ -251,9 +269,15 @@ treatment's layer coverage and |Δc|, else at least 75%, else the closest remain
   scaled to exactly the treatment's ||Δh||, and after that its |Δc| depends only on how far apart the
   two tokens' lens vectors are compared with the treatment's two -- so pairs are judged on the |Δc|
   they will have after scaling.
-Tokenizer special tokens and tokens that don't re-tokenize to themselves are never controls; they
-are listed separately in `selection.yaml` (`excluded_special`). To exclude more tokens, extend
-`controls.control_ineligible` in `configs/tokens.yaml`; the next positives run picks it up.
+Never candidates: the `control_ineligible` tokens and any token containing one of them; the answer
+tokens (Yes, No, Hola, Bonjour, with and without a leading space -- one could push an answer
+directly); every token without a letter or a digit (punctuation, blank lines, symbols -- odd tokens
+that can have large, unspecific effects); and every token that occurs in the passages' own text,
+compared without leading spaces and ignoring case (so the passage's ` sous` also rules out `sous` and
+` Sous`) -- a word of either language would put a language back in. Tokenizer special tokens and
+tokens that don't re-tokenize to
+themselves are never controls either; they are listed separately in `selection.yaml`
+(`excluded_special`).
 
 Per prompt, both directions: identity, swap (the treatment, alpha 1), random_direction, 3
 label_to_present, 3 big_nonlabel = 18 cells; 576 per run. Saved per prompt: `records/` (one row per
@@ -301,13 +325,15 @@ numbers mean nothing. Nothing is uploaded: `runs/dryrun/_hf/` stands in for the 
 folders go to `runs/dryrun/`. The dry runs use their own bands (`configs/experiments/dryrun/
 bands.yaml`; `configs/bands.yaml` is untouched) and skip the M1 check. Chain 1 = question set,
 band `[9, 18]`; chain 2 = message set, the split band `[[9, 13], [16, 18]]`. Only in dry-run files,
-`from_m2_run` / `positives_run` may say `latest:<experiment name>` (the most recent finished run),
-so no hand edits are needed between steps.
+`from_m2_run` / `controls_run` / `positives_run` may say `latest:<experiment name>` (the most recent
+finished run), so no hand edits are needed between steps (the dry chain skips the controls review).
 
 ```bash
 python scripts/m2_loading.py --experiment configs/experiments/dryrun/m2_loading.yaml
+python scripts/m3_controls.py --experiment configs/experiments/dryrun/m3_controls_question.yaml
 python scripts/m3_grid.py --experiment configs/experiments/dryrun/m3_positives_question.yaml
 python scripts/m3_grid.py --experiment configs/experiments/dryrun/m3_anomaly_question.yaml
+python scripts/m3_controls.py --experiment configs/experiments/dryrun/m3_controls_message.yaml
 python scripts/m3_grid.py --experiment configs/experiments/dryrun/m3_positives_message.yaml
 python scripts/m3_grid.py --experiment configs/experiments/dryrun/m3_anomaly_message.yaml
 ```
@@ -437,10 +463,14 @@ unknown, not "no effect" -- and `panel_c` leaves those out of the flip rates.
   panel labels say "at every position". Both are run.
 - **Invariant 7's stop is a human decision between runs**: each position set runs as a positives run
   (report, hello) and, after you read its summary, an anomaly run (anomaly, content).
-- **Controls are automatic, with no human approval** (the spec's `controls_proposed.yaml` review step
-  is gone; `tokens.yaml` keeps only the blocklist): matched to the treatment on layer coverage and
-  |Δc| (100%, else 75%, else closest, flagged), 3 per kind, candidates from the top **100** readout
-  (the spec's 25 is superseded; its "in half the prompts" rule is replaced by the coverage bar).
+- **Controls are picked by rule in a separate step that stops for your review** (the spec's
+  "`controls_proposed.yaml`, approved by the human, copied into `tokens.yaml`" becomes: a controls
+  run picks them, you read its summary, extend the blocklist and pick again if needed, and name the
+  accepted run in the positives experiment file; `tokens.yaml` keeps only the blocklist; decided
+  2026-09-11): matched to the treatment on layer coverage and |Δc| (100%, else 75%, else closest,
+  flagged), 3 per kind, candidates from the top **100** readout (the spec's 25 is superseded; its "in
+  half the prompts" rule is replaced by the coverage bar), without the answer tokens, punctuation
+  (no letter or digit) and the passages' own words (added 2026-09-11).
   label_to_present: 3 tokens per row x question check, each lowering the removed label in its check
   (the spec's "loading below the label" intent); big_nonlabel: one set for all 16 checks, judged on
   the |Δc| it has after scaling to the treatment's ||Δh|| (decided 2026-09-11).

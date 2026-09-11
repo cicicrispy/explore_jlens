@@ -1,0 +1,26 @@
+# M3 (Phase B, GPU), position set "message" -- CONTROLS run: picks the control tokens by rule
+# (src/jlens_spec/controls.py) from the message positions and STOPS; no cell runs. Read its summary.
+# If a pick carries language, extend controls.control_ineligible in configs/tokens.yaml, commit, and
+# run this again (a new run folder). Put the run you accept into controls_run: of
+# m3_positives_message.yaml. Hand-written; copied into the run folder's settings/.
+#
+#   python scripts/m3_controls.py --experiment configs/experiments/m3_controls_message.yaml
+
+name: controls_message     # run folders: runs/M3/controls_message_<UTC start time>/
+milestone: M3
+
+position_set: message      # instruction + question + matrix + intrusion (prompts.POSITION_SETS)
+band: workspace
+
+# REQUIRED: folder names of finished runs.
+from_m2_run: null
+m1_validate_run: null
+
+skip_first: 0
+
+controls:
+  n_per_kind: 3
+  bars: [1.0, 0.75]
+  pool_k: 100
+  pair_pool: 20
+  norm_scale: 1.0

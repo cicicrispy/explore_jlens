@@ -1,8 +1,13 @@
-"""Automatic control-token selection for M3 -- no human review (a user-approved departure from the
-spec's "human approves controls_proposed.yaml" step; see README "Departures from the spec").
+"""Control-token selection for M3 -- picked by rule, then read by the human before any cell runs
+(the spec's "propose, then the human approves" step, in this form since 2026-09-11; see README
+"Departures from the spec").
 
-Controls are picked at the start of each position set's POSITIVES run (scripts/m3_grid.py), saved in
-that run's controls/ folder before any cell runs, and reused by the matching anomaly run.
+Controls are picked by a CONTROLS run (scripts/m3_controls.py, one per position set) and saved in its
+controls/ folder; the run then stops. The human reads its summary; the only lever is
+`controls.control_ineligible` in configs/tokens.yaml -- extend it, commit, and run the controls step
+again (a new run folder). The position set's POSITIVES run names the accepted controls run
+(`controls_run:` in its experiment file) and copies its selection.yaml; the ANOMALY run reuses the
+positives run's copy. Both refuse a selection that doesn't match them (selection_problems).
 
 Each treatment swap exchanges the language being REMOVED (s) with the one SWAPPED IN (t). With the
 treatment pair (es word, fr word) there are four treatment rows per position set:
@@ -25,9 +30,17 @@ Measures -- always within the run's band only, at the positions the treatment ed
   positions x band layers -- the same average the M3 summary reports as the measured ratio.
 
 Candidates: every token in the top-`pool_k` readout at the edited positions within the band, on any
-of the 64 prompts, minus `control_ineligible` tokens and any token whose text contains one of them
-(case-insensitive). Tokenizer special tokens and tokens whose text does not re-tokenize to exactly
-themselves are never used as controls; they are listed separately (`excluded_special`).
+of the 64 prompts, minus
+  - `control_ineligible` tokens and any token whose text contains one of them (case-insensitive);
+  - the answer tokens (every form metrics.answer_ids gives: Yes / No / the hello words, with and
+    without a leading space) -- swapping one in could push an answer directly;
+  - every token without a letter or a digit (punctuation, blank lines, symbols) -- odd tokens that
+    can have large, unspecific effects;
+  - any token that occurs in the passages' own text: its text, without leading spaces and ignoring
+    case, equals that of a token with at least one letter at a matrix or intrusion position of any
+    prompt (passage_words) -- a word of either language would put a language back in.
+Tokenizer special tokens and tokens whose text does not re-tokenize to exactly themselves are never
+used as controls; they are listed separately (`excluded_special`).
 
 label_to_present -- keeps the removed label s; the control token x stands in for the swapped-in t,
     and must LOWER the label: the swap exchanges coordinates, so the label's coordinate c_s becomes
@@ -68,8 +81,13 @@ from . import model as model_mod
 
 ROWS = ("es_m2i", "es_i2m", "fr_m2i", "fr_i2m")
 TIER_LABELS = {1: ">=100%", 2: ">=75%", 3: "below 75%", 4: "does not lower the label"}
-# controls/selection.yaml layout; an anomaly run refuses a positives run's file with another version.
-SELECTION_VERSION = 3
+# controls/selection.yaml layout and rules; a positives or anomaly run refuses a file with another
+# version (4: answer tokens and passage words excluded; picked by a separate controls run).
+SELECTION_VERSION = 4
+# The settings a run must share with the selection it uses (selection_problems).
+MATCH_KEYS = ("position_set", "band_layers", "from_m2_run", "pair_words", "skip_first")
+PASSAGE_CLASSES = ("matrix", "intrusion")
+NO_LETTER_OR_DIGIT = "punctuation (no letter or digit)"   # an excluded_reason
 
 
 def treatment_rows(pair_words) -> list[dict]:
@@ -145,13 +163,33 @@ def coverage_by_group(cov: pd.DataFrame, prompts_by_group: dict, n_band_layers: 
 # ----------------------------------------------------------------------------- candidates
 
 
-def classify_tokens(token_ids, tokenizer, ineligible) -> pd.DataFrame:
+def word_key(text: str) -> str:
+    """A token's text for the passage-word rule: without leading spaces, lower case (' Sous' -> 'sous')."""
+    return text.lstrip(" ").lower()
+
+
+def passage_words(prompts, tokenizer) -> set[str]:
+    """word_key of every token with at least one letter at a matrix or intrusion position of these
+    prompts -- the passages' own words, in any case and with or without a leading space. Tokens
+    without a letter are left out here (punctuation has its own rule in classify_tokens)."""
+    out = set()
+    for p in prompts:
+        for tid, cls in zip(p.input_ids, p.classes):
+            if cls in PASSAGE_CLASSES:
+                key = word_key(tokenizer.decode([int(tid)]))
+                if any(ch.isalpha() for ch in key):
+                    out.add(key)
+    return out
+
+
+def classify_tokens(token_ids, tokenizer, ineligible, answer_ids, passage_words) -> pd.DataFrame:
     """For each id: its text and why it can't be a control ('' = eligible). Special tokens and tokens
     that don't re-tokenize to themselves are kept apart ('special token' / 'does not re-tokenize to
-    itself') -- never controls, listed separately."""
+    itself') -- never controls, listed separately. `answer_ids`: the answer tokens' ids
+    (metrics.answer_ids); `passage_words`: see passage_words()."""
     special = set(tokenizer.all_special_ids) | set(getattr(tokenizer, "added_tokens_decoder", {}) or {})
     names = [n.strip().lower() for n in ineligible if n.strip()]
-    ineligible = set(ineligible)
+    ineligible, answer_ids, passage_words = set(ineligible), {int(i) for i in answer_ids}, set(passage_words)
     rows = []
     for tid in token_ids:
         tid = int(tid)
@@ -164,10 +202,55 @@ def classify_tokens(token_ids, tokenizer, ineligible) -> pd.DataFrame:
             reason = "control_ineligible"
         elif any(n in text.lower() for n in names):
             reason = "contains a language name"
+        elif tid in answer_ids:
+            reason = "answer token"
+        elif not any(ch.isalnum() for ch in text):
+            reason = NO_LETTER_OR_DIGIT
+        elif word_key(text) in passage_words:
+            reason = "occurs in the passages"
         else:
             reason = ""
         rows.append({"token_id": tid, "token": text, "excluded_reason": reason})
     return pd.DataFrame(rows, columns=["token_id", "token", "excluded_reason"])
+
+
+def selection_problems(selection: dict, **expected) -> list[str]:
+    """Why a controls/selection.yaml can't be used by a run with these settings ([] = it can): it must
+    be written by the current rules (SELECTION_VERSION) and match the run on every MATCH_KEYS setting,
+    all of which must be given. The code version that picked it (recorded as git_commit) is NOT
+    compared: the controls may be picked again after M2 while the code changes for other reasons, and
+    a change of the rules themselves bumps SELECTION_VERSION."""
+    missing = [k for k in MATCH_KEYS if k not in expected]
+    if missing:
+        raise ValueError(f"selection_problems needs {missing}")
+    if selection.get("selection_version") != SELECTION_VERSION:
+        return [f"selection_version {selection.get('selection_version')} -- picked by other rules "
+                f"(this code expects {SELECTION_VERSION})"]
+    return [f"{k}: {selection.get(k)!r} there, {expected[k]!r} here" for k in MATCH_KEYS
+            if selection.get(k) != expected[k]]
+
+
+def coverage_text(ratio: float) -> str:
+    return "coverage: no bar (the treatment tokens are never in the top-100 here)" if ratio == float("inf") \
+        else f"coverage {ratio:.2f}x"
+
+
+def control_lines(selection: dict, questions) -> list[str]:
+    """The picked controls, for a log or a summary: label_to_present one line per check of these
+    questions (each check has its own tokens), big_nonlabel one line per pair (shared by every check)."""
+    n = len(selection["checks"])
+    cov = coverage_text
+    lines = []
+    for k, t in selection["checks"].items():
+        if t["question"] not in questions:
+            continue
+        picks = "; ".join(f"{c['token']!r} ({c['tier_label']}, |Δc| {c['dc_ratio']:.2f}x, {cov(c['cov_ratio'])})"
+                          for c in selection["label_to_present"][k])
+        lines.append(f"  - label_to_present, {k}: {picks}")
+    lines += [f"  - big_nonlabel[{c['control_index']}]: {c['a_token']!r} <-> {c['b_token']!r}, tier {c['tier_label']} "
+              f"-- lowest over the {n} checks: |Δc| after scaling {c['dc_ratio_worst']:.3f}x the treatment's, "
+              f"{cov(c['cov_ratio_worst'])}" for c in selection["big_nonlabel"]]
+    return lines
 
 
 def big_nonlabel_pool(cands: pd.DataFrame, treat: dict, pool_size: int, bars) -> pd.DataFrame:
