@@ -1,0 +1,35 @@
+# M3 (Phase B, GPU), position set "question" -- POSITIVES run: report + hello. Run this FIRST, read its
+# summary, and only then launch m3_anomaly_question.yaml (hygiene invariant 7: the positive controls
+# run before any anomaly cell; the decision to continue is yours). Hand-written; copied into the run
+# folder's settings/.
+#
+#   python scripts/m3_grid.py --experiment configs/experiments/m3_positives_question.yaml
+#
+# This run also PICKS THE CONTROL TOKENS (automatic, no review -- src/jlens_spec/controls.py) and saves
+# them in its controls/ folder; the anomaly run of this position set reuses them.
+
+name: positives_question   # run folders: runs/M3/positives_question_<UTC start time>/
+milestone: M3
+
+questions: [report, hello]
+position_set: question     # the question sentence only (src/jlens_spec/prompts.py POSITION_SETS)
+band: workspace            # the band from configs/bands.yaml -- M3 uses the workspace band only (spec)
+
+# REQUIRED: folder names of finished runs, e.g. loading_20260912-031000 / validate_20260912-031000.
+from_m2_run: null          # runs/M2/<this>/: the treatment pair (pair_score argmax) + the control pool
+m1_validate_run: null      # runs/M1/<this>/: must have passed
+
+# Fixed by the spec or agreed with the human -- change only after asking.
+directions: [m2i, i2m]     # matrix->intrusion language and the reverse
+alpha: 1.0                 # treatment alpha (spec: alpha = 1)
+seed: 0                    # random_direction's per-layer random vectors; the summary's sampled cells
+skip_first: 0              # 0 from M2 on: the paper swaps across ALL question tokens (departure from
+                           # invariant 3's "skip the first ~4"; those are chat-template tokens here anyway)
+save_topk: 100             # the model's top next tokens saved per cell
+
+controls:                  # automatic control selection (rules: src/jlens_spec/controls.py)
+  n_per_kind: 3            # label_to_present targets and big_nonlabel pairs, each its own cell
+  bars: [1.0, 0.75]        # >= 100% of the treatment's layer coverage and |delta c|; else >= 75%; else the closest
+  pool_k: 100              # candidates = the top-100 lens readout (the spec's 25 is superseded)
+  pair_pool: 20            # big_nonlabel pairs are formed from the 20 members with the widest coverage
+  norm_scale: 1.0          # big_nonlabel / random_direction edits are scaled to norm_scale x the treatment's ||delta h||

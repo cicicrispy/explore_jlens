@@ -1,0 +1,22 @@
+# M3 (Phase B, GPU), position set "message" -- ANOMALY run: anomaly + content. Launch only after
+# reading the summary of the positives run of this position set (hygiene invariant 7).
+#
+#   python scripts/m3_grid.py --experiment configs/experiments/m3_anomaly_message.yaml
+
+name: anomaly_message      # run folders: runs/M3/anomaly_message_<UTC start time>/
+milestone: M3
+
+questions: [anomaly, content]
+position_set: message
+band: workspace
+
+# REQUIRED: folder names of finished runs.
+from_m2_run: null
+positives_run: null        # runs/M3/<this>/, e.g. positives_message_20260912-031000
+m1_validate_run: null
+
+directions: [m2i, i2m]
+alpha: 1.0
+seed: 0
+skip_first: 0
+save_topk: 100

@@ -1,0 +1,32 @@
+# M3 (Phase B, GPU), position set "message" -- POSITIVES run: report + hello. Edits EVERY token of the
+# user message (the paper's instruction text, the question, and the passage; never the chat template)
+# -- the second position set, approved by the human (the spec's M3 is question-only; the paper's
+# figures say "at every position"). Run this first, read its summary, then m3_anomaly_message.yaml.
+#
+#   python scripts/m3_grid.py --experiment configs/experiments/m3_positives_message.yaml
+#
+# This run picks its own control tokens (from the message positions) and saves them in controls/.
+
+name: positives_message    # run folders: runs/M3/positives_message_<UTC start time>/
+milestone: M3
+
+questions: [report, hello]
+position_set: message      # instruction + question + matrix + intrusion (prompts.POSITION_SETS)
+band: workspace
+
+# REQUIRED: folder names of finished runs.
+from_m2_run: null
+m1_validate_run: null
+
+directions: [m2i, i2m]
+alpha: 1.0
+seed: 0
+skip_first: 0
+save_topk: 100
+
+controls:
+  n_per_kind: 3
+  bars: [1.0, 0.75]
+  pool_k: 100
+  pair_pool: 20
+  norm_scale: 1.0

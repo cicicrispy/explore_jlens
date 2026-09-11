@@ -1,7 +1,7 @@
 {
   "questions": {
-    "report": "What language is this passage written in? Answer with one word.",
-    "hello": "What is the word for 'hello' in the language of this passage? Answer with one word.",
+    "report": "What language is this passage written in? Answer in one word.",
+    "hello": "What is the word for 'hello' in the language of this passage? Answer with just that word.",
     "anomaly": "Does this passage switch languages partway through? Answer only Yes or No.",
     "content": "Is this passage set outdoors? Answer only Yes or No."
   },

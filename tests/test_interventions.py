@@ -1,5 +1,6 @@
 import pytest
 import torch
+import yaml
 
 from jlens_spec import interventions as iv
 
@@ -152,7 +153,8 @@ def _trace_setup(standin_model, random_lens):
 
     with open("stimuli/stimuli.json") as f:
         stim = json.load(f)
-    fmt = {"tokenizer": standin_model.tokenizer, "questions": stim["questions"]}
+    with open("configs/prompt_format.yaml") as f:
+        fmt = prompts_mod.make_fmt(standin_model.tokenizer, stim, yaml.safe_load(f))
     p = prompts_mod.build_prompt(stim["passages"][0], "report", fmt)
     with standin_model.trace(p.input_ids):
         clean = standin_model.output.logits[0, p.metric_pos].float().save()
@@ -219,7 +221,8 @@ def test_prompts_are_independent_forward_passes(standin_model):
 
     with open("stimuli/stimuli.json") as f:
         stim = json.load(f)
-    fmt = {"tokenizer": standin_model.tokenizer, "questions": stim["questions"]}
+    with open("configs/prompt_format.yaml") as f:
+        fmt = prompts_mod.make_fmt(standin_model.tokenizer, stim, yaml.safe_load(f))
     a = prompts_mod.build_prompt(stim["passages"][0], "report", fmt)
     b = prompts_mod.build_prompt(stim["passages"][1], "anomaly", fmt)
 

@@ -68,7 +68,7 @@ def main() -> None:
     assert "qwen" in hf_id.lower() or "qwen" in type(tok).__name__.lower(), f"not a Qwen tokenizer: {type(tok).__name__}"
 
     print("[2/5] Building the 64 prompts and checking every region's tokens ...", flush=True)
-    fmt = {"tokenizer": tok, "questions": stim["questions"]}
+    fmt = prompts_mod.make_fmt(tok, stim, run.load("prompt_format.yaml"))
     prompts = [prompts_mod.build_prompt(s, q, fmt) for s in stim["passages"] for q in stim["questions"]]
     flags = {f"{p.stimulus_id}/{p.question_key}": p.flags for p in prompts if p.flags}
     rows = [{**r, "run_id": run.run_id} for p in prompts for r in prompts_mod.region_check(p)]

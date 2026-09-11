@@ -1,6 +1,14 @@
-# Filled by scripts/m0_smoke.py (stand-in tokenizer) and re-derived/re-recorded by
-# scripts/m1_validate.py (real tokenizer, canonical). Do not hand-edit `template_string`.
-#
+# Prompt format. Hand-written; no code writes this file. Scripts record the exact templated string
+# they observed in their own run folder (template_string.txt), never here.
+
+# user_message: the text of the user turn, exactly as in the paper (transformer-circuits.pub/2026/
+# workspace, Figure 20). {question} and {passage} are replaced by the question string and the passage
+# text from stimuli/stimuli.json. Everything else in it (the two instruction sentences AND the blank
+# lines between the parts) is classed "instruction" (src/jlens_spec/prompts.py). The chat template
+# (<|im_start|>user ... <|im_end|>, the assistant/think prefix) is added around it and classed
+# "template".
+user_message: "I will show you a passage of text. After reading it, answer the following.\n\n{question}\n\nHere is the passage:\n\n{passage}"
+
 # Required suffix, asserted in code (src/jlens_spec/prompts.py):
 #   "<|im_start|>assistant\n<think>\n\n</think>\n\n"
 required_suffix: "<|im_start|>assistant\n<think>\n\n</think>\n\n"
@@ -13,9 +21,8 @@ think_prefill: "<think>\n\n</think>\n\n"
 # i.e. len(input_ids) - 1. classes[metric_pos] must equal "template".
 metric_pos_rule: "len(input_ids) - 1, immediately after the think-prefill suffix"
 
-# template_string: exact templated text for one stimulus (stand-in at M0, real tokenizer at M1).
-# NOTE: not filled in yet -- this repo has not been run. scripts/m0_smoke.py will populate this on
-# first execution; if the enable_thinking path or the asserted suffix needs adjustment once real
-# tokenizer output is seen, we refactor here rather than guessing further.
+# template_string: not read by any code. The exact templated text for one stimulus is recorded by
+# each run in its own folder (template_string.txt: M0 = stand-in, M1 tokens run = real tokenizer);
+# copy it here by hand if you want it on record in configs/.
 template_string: null
-source: null   # "m0-standin" or "m1-real", set by whichever script last wrote template_string
+source: null   # "m0-standin" or "m1-real", if you copy a template_string here by hand

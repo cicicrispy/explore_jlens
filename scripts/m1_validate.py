@@ -82,7 +82,7 @@ def main() -> None:
     model = model_mod.load_model(model_cfg, standin=False)
     lens = lens_mod.load_lens(lens_cfg, device=model_mod.device_of(model))
     tok = model.tokenizer
-    fmt = {"tokenizer": tok, "questions": stim["questions"]}
+    fmt = prompts_mod.make_fmt(tok, stim, run.load("prompt_format.yaml"))
     all_prompts = [prompts_mod.build_prompt(s, q, fmt) for s in stim["passages"] for q in stim["questions"]]
 
     def save(rows, name):
@@ -171,8 +171,9 @@ def main() -> None:
         f"- Check 4 (band signatures): candidate motor onset = {onset}. The human reads "
         "figures/png/band_signatures.png and fills configs/bands.yaml -- no code does this.", "",
         "## 3. Figures",
-        f"- {len(written)} figures in figures/png/, all drawn from this folder's parquet/JSON files. Redraw "
-        f"without the model: `python scripts/make_figures.py {run.dir} --format pdf`", "",
+        f"- {len(written)} figures in figures/png/, all drawn from this folder's parquet/JSON files. Figures "
+        f"are NOT uploaded; redraw them from the data without the model: `python scripts/make_figures.py "
+        f"{run.dir} --format pdf`", "",
         "## 4. Anomalies / open questions",
         f"- Check 2 counts a {lang} language token by the FIRST token of each variant in configs/tokens.yaml, "
         "including variants that are several tokens long.", "",

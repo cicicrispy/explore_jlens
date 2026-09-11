@@ -96,3 +96,38 @@ def expand_band(band_spec) -> list[int]:
             raise ValueError(f"band [{start}, {end}] has end < start")
         layers.update(range(start, end + 1))
     return sorted(layers)
+
+
+BAND_NAMES = ("workspace", "full", "early_late")
+
+
+def check_bands(bands: dict, lens_layers=None) -> dict[str, list[int]]:
+    """M2 and M3 refuse to run unless configs/bands.yaml is complete and consistent. Returns
+    {band name: expanded layer list}; raises ValueError listing every problem otherwise:
+      - all three bands (workspace, full, early_late) are filled;
+      - `full` starts at the same layer as `workspace` (the workspace onset);
+      - `workspace` lies inside `full`;
+      - every `early_late` layer lies inside `workspace`;
+      - if `lens_layers` is given, every layer of every band is covered by the lens (so the final
+        layer, which the lens never covers, can't be in a band).
+    Together these keep sensory layers (below the onset) out of every band."""
+    missing = [n for n in BAND_NAMES if not bands.get(n)]
+    if missing:
+        raise ValueError(f"configs/bands.yaml: {', '.join(missing)} not filled yet -- M2/M3 need all three "
+                         "(read them off M1's band-signature and CKA figures)")
+    ex = {n: expand_band(bands[n]) for n in BAND_NAMES}
+    problems = []
+    if ex["full"][0] != ex["workspace"][0]:
+        problems.append(f"full starts at layer {ex['full'][0]}, workspace at {ex['workspace'][0]} "
+                        "(full must start at the workspace onset)")
+    if not set(ex["workspace"]) <= set(ex["full"]):
+        problems.append(f"workspace layers {sorted(set(ex['workspace']) - set(ex['full']))} are not in full")
+    if not set(ex["early_late"]) <= set(ex["workspace"]):
+        problems.append(f"early_late layers {sorted(set(ex['early_late']) - set(ex['workspace']))} are not in workspace")
+    if lens_layers is not None:
+        uncovered = sorted({l for layers in ex.values() for l in layers} - set(lens_layers))
+        if uncovered:
+            problems.append(f"layers {uncovered} are not covered by the lens (the final layer never is)")
+    if problems:
+        raise ValueError("configs/bands.yaml is inconsistent: " + "; ".join(problems))
+    return ex

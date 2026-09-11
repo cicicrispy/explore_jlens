@@ -1,0 +1,22 @@
+# DRY RUN (Mac), chain 1: position set "question", band workspace [9, 18]. Anomaly run: anomaly +
+# content, reusing the dry positives run's controls.
+#
+#   python scripts/m3_grid.py --experiment configs/experiments/dryrun/m3_anomaly_question.yaml
+
+name: anomaly_question
+milestone: M3
+questions: [anomaly, content]
+position_set: question
+band: workspace
+from_m2_run: latest:loading
+positives_run: latest:positives_question
+directions: [m2i, i2m]
+alpha: 1.0
+seed: 0
+skip_first: 0
+save_topk: 100
+
+dryrun:
+  store: runs/dryrun/_hf
+  lens_seed: 0
+  bands_file: configs/experiments/dryrun/bands.yaml

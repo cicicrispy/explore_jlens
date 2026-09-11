@@ -14,7 +14,8 @@ from jlens_spec import prompts as prompts_mod
 def _prompts(standin_model):
     with open("stimuli/stimuli.json") as f:
         stim = json.load(f)
-    fmt = {"tokenizer": standin_model.tokenizer, "questions": stim["questions"]}
+    with open("configs/prompt_format.yaml") as f:
+        fmt = prompts_mod.make_fmt(standin_model.tokenizer, stim, yaml.safe_load(f))
     return [prompts_mod.build_prompt(s, q, fmt) for s in stim["passages"] for q in stim["questions"]]
 
 

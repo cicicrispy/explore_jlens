@@ -1,0 +1,22 @@
+# DRY RUN (Mac), chain 2: position set "message", split band early_late. Anomaly run: anomaly +
+# content, reusing the dry positives_message run's controls.
+#
+#   python scripts/m3_grid.py --experiment configs/experiments/dryrun/m3_anomaly_message.yaml
+
+name: anomaly_message
+milestone: M3
+questions: [anomaly, content]
+position_set: message
+band: early_late
+from_m2_run: latest:loading
+positives_run: latest:positives_message
+directions: [m2i, i2m]
+alpha: 1.0
+seed: 0
+skip_first: 0
+save_topk: 100
+
+dryrun:
+  store: runs/dryrun/_hf
+  lens_seed: 0
+  bands_file: configs/experiments/dryrun/bands.yaml

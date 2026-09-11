@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shutil
 import time
 from dataclasses import dataclass
@@ -115,3 +116,124 @@ def open_run(run_dir) -> Run:
     run_dir = Path(run_dir)
     m = json.loads((run_dir / "manifest.json").read_text())
     return Run(m["milestone"], m["run_id"], run_dir)
+
+
+# ------------------------------------------------------------------------------------ resume
+#
+# A long run (M2, M3) saves one set of files per prompt and uploads them as each prompt finishes.
+# Starting the same experiment again RESUMES it if its most recent run is unfinished (no
+# summary.md in the store): prompts whose files are in the store are done; anything that exists only
+# on this machine is recomputed (a file on one machine only does not count); files that are in the
+# store but not here are downloaded at the end. A resumed run keeps using its own settings copy --
+# edits to configs/ since it started are printed, not applied -- and code changes are allowed (every
+# row carries the git commit that produced it).
+
+_RUN_ID = re.compile(r"^(?P<name>.+)_(?P<stamp>\d{8}-\d{6})(?:-(?P<n>\d+))?$")
+
+
+def _order(run_id: str):
+    m = _RUN_ID.match(run_id)
+    return (m["stamp"], int(m["n"] or 1))
+
+
+def run_ids(milestone: str, name: str, root=RUNS_ROOT, store=None) -> list[str]:
+    """Every run of the experiment called `name` -- folders on this machine and, if `store` is
+    given, folders in the store -- oldest first."""
+    found = set()
+    local = Path(root) / milestone
+    if local.exists():
+        found |= {p.name for p in local.iterdir() if p.is_dir()}
+    if store is not None:
+        found |= store.list_dirs(f"{Path(root).as_posix()}/{milestone}")
+    return sorted((i for i in found if (m := _RUN_ID.match(i)) and m["name"] == name), key=_order)
+
+
+def is_finished(run_dir, store) -> bool:
+    """A run is finished if and only if its summary.md is in the store."""
+    return store.exists(f"{Path(run_dir).as_posix()}/summary.md")
+
+
+def fetch_settings(run_dir, store) -> None:
+    """Download a run's manifest.json and settings/ from the store if this machine lacks them
+    (resuming on a new machine)."""
+    run_dir = Path(run_dir)
+    for f in sorted(store.list_files(run_dir)):
+        rel = Path(f).relative_to(run_dir)
+        if (rel.name == "manifest.json" and len(rel.parts) == 1) or rel.parts[0] == "settings":
+            if not Path(f).exists():
+                store.download(f)
+
+
+def settings_diff(run: Run) -> list[str]:
+    """Names of the settings files whose current source (the path recorded in the manifest) now
+    differs from the run's own copy, or no longer exists. The run keeps using its copy."""
+    changed = []
+    for name, src in run.manifest()["settings_sources"].items():
+        src = Path(src)
+        if not src.exists() or src.read_bytes() != run.settings_path(name).read_bytes():
+            changed.append(name)
+    return changed
+
+
+def uploaded_files(run_dir, store) -> set[str]:
+    """Paths (relative to the run folder) of every file of this run that is in the store."""
+    run_dir = Path(run_dir)
+    return {Path(f).relative_to(run_dir).as_posix() for f in store.list_files(run_dir)}
+
+
+def sync_down(run_dir, store) -> list[str]:
+    """Download every file of this run that is in the store but not on this machine (e.g. prompts
+    finished on another machine before a resume). Returns the paths downloaded."""
+    run_dir = Path(run_dir)
+    got = []
+    for rel in sorted(uploaded_files(run_dir, store)):
+        if not (run_dir / rel).exists():
+            store.download(run_dir / rel)
+            got.append(rel)
+    return got
+
+
+def start_or_resume(milestone: str, experiment_path, settings_files: list, store, root=RUNS_ROOT,
+                    fresh: bool = False, resume=None) -> tuple[Run, bool]:
+    """The run a long script should work in, and whether it is a resumed one:
+    - `resume` (a run folder): that run. Refuses if it is already finished.
+    - `fresh`: always a new run folder.
+    - otherwise: the experiment's MOST RECENT run if it is unfinished, else a new run. An older
+      unfinished run is never picked up by default (pass its folder with `resume`).
+    Prints which, and -- when resuming -- which settings files have changed in configs/ since (the
+    run keeps using its own copy)."""
+    if resume is not None and fresh:
+        raise ValueError("pass either --resume or --fresh, not both")
+    if resume is not None:
+        run_dir = Path(resume)
+    elif fresh:
+        run_dir = None
+    else:
+        with open(experiment_path) as f:
+            name = yaml.safe_load(f)["name"]
+        ids = run_ids(milestone, name, root, store)
+        run_dir = Path(root) / milestone / ids[-1] if ids else None
+        if run_dir is not None and is_finished(run_dir, store):
+            print(f"The most recent run of '{name}' ({run_dir.name}) is finished -- starting a new run.", flush=True)
+            run_dir = None
+
+    if run_dir is None:
+        run = start_run(milestone, experiment_path, settings_files, root=root)
+        print(f"New run folder: {run.dir}", flush=True)
+        return run, False
+
+    if is_finished(run_dir, store):
+        raise SystemExit(f"{run_dir} is already finished (its summary.md is in the {store.name}); "
+                         "a finished run is never changed. Start a new one with --fresh.")
+    fetch_settings(run_dir, store)
+    if not (run_dir / "manifest.json").exists():
+        raise SystemExit(f"{run_dir}: no manifest.json on this machine or in the {store.name}")
+    run = open_run(run_dir)
+    if run.milestone != milestone:
+        raise SystemExit(f"{run_dir} is a {run.milestone} run, not {milestone}")
+    changed = settings_diff(run)
+    print(f"RESUMING unfinished run {run.dir} (settings from its own copy in settings/).", flush=True)
+    if changed:
+        print(f"  NOTE: these settings files changed in configs/ since the run started; the run keeps "
+              f"its copy, the changes apply to a new run (--fresh): {', '.join(changed)}", flush=True)
+    return run, True

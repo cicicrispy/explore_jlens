@@ -58,7 +58,7 @@ def main() -> None:
     model = model_mod.load_model(model_cfg, standin=True, device=args.device)
     print(f"      loaded on {model_mod.device_of(model)}", flush=True)
     tokenizer = model.tokenizer
-    fmt = {"tokenizer": tokenizer, "questions": stim["questions"]}
+    fmt = prompts_mod.make_fmt(tokenizer, stim, run.load("prompt_format.yaml"))
 
     all_prompts = []
     all_flags = {}

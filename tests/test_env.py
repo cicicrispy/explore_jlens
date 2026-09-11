@@ -55,3 +55,31 @@ def test_config_hash_deterministic(tmp_path):
     p2.write_text("b: 3\n")
     h3 = env.config_hash(str(p1), str(p2))
     assert h3 != h1
+
+
+# ---------------------------------------------------------------- bands check (M2/M3 refuse)
+
+
+_OK = {"workspace": [18, 40], "full": [18, 62], "early_late": [[18, 25], [33, 40]]}
+
+
+def test_check_bands_accepts_nested_bands_and_expands_them():
+    ex = env.check_bands(_OK, lens_layers=range(63))
+    assert ex["workspace"] == list(range(18, 41)) and ex["early_late"] == [*range(18, 26), *range(33, 41)]
+
+
+@pytest.mark.parametrize("bands, message", [
+    ({**_OK, "full": None}, "full not filled"),
+    ({"workspace": None, "full": None, "early_late": None}, "workspace, full, early_late not filled"),
+    ({**_OK, "full": [17, 62]}, "full must start at the workspace onset"),
+    ({**_OK, "full": [18, 30]}, "are not in full"),
+    ({**_OK, "early_late": [[18, 25], [38, 45]]}, "are not in workspace"),
+])
+def test_check_bands_refuses_incomplete_or_inconsistent_bands(bands, message):
+    with pytest.raises(ValueError, match=message):
+        env.check_bands(bands, lens_layers=range(63))
+
+
+def test_check_bands_refuses_layers_the_lens_does_not_cover():
+    with pytest.raises(ValueError, match="not covered by the lens"):
+        env.check_bands({**_OK, "full": [18, 63]}, lens_layers=range(63))  # 63 = the final layer

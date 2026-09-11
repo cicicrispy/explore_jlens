@@ -1,6 +1,7 @@
 import json
 
 import pytest
+import yaml
 
 from jlens_spec import prompts as prompts_mod
 
@@ -10,8 +11,13 @@ def _load_stimuli():
         return json.load(f)
 
 
+def _prompt_format():
+    with open("configs/prompt_format.yaml") as f:
+        return yaml.safe_load(f)
+
+
 def _fmt(standin_model, stim):
-    return {"tokenizer": standin_model.tokenizer, "questions": stim["questions"]}
+    return prompts_mod.make_fmt(standin_model.tokenizer, stim, _prompt_format())
 
 
 def test_classes_cover_all_tokens(standin_model):
@@ -19,7 +25,47 @@ def test_classes_cover_all_tokens(standin_model):
     stimulus = stim["passages"][0]
     p = prompts_mod.build_prompt(stimulus, "report", _fmt(standin_model, stim))
     assert len(p.classes) == len(p.input_ids)
-    assert set(p.classes) <= {"template", "question", "matrix", "intrusion"}
+    assert set(p.classes) <= {"template", "instruction", "question", "matrix", "intrusion"}
+
+
+def test_user_message_is_the_papers_wrapper_around_question_and_passage(standin_model):
+    """The user turn is exactly configs/prompt_format.yaml's user_message with the question and
+    passage filled in (the paper's Figure 20 wrapper), and everything else in it is 'instruction'
+    text: the two instruction sentences and the blank lines between the parts."""
+    stim = _load_stimuli()
+    stimulus = stim["passages"][0]
+    p = prompts_mod.build_prompt(stimulus, "anomaly", _fmt(standin_model, stim))
+    q = stim["questions"]["anomaly"]
+    message = ("I will show you a passage of text. After reading it, answer the following.\n\n"
+               f"{q}\n\nHere is the passage:\n\n{stimulus['text']}")
+    assert message in p.text
+    start = p.text.index(message)
+    q0, q1 = p.spans["question"]
+    p0, p1 = p.spans["passage"]
+    assert p.text[q0:q1] == q and p.text[p0:p1] == stimulus["text"]
+    assert p.spans["instruction"] == [[start, q0], [q1, p0]]  # nothing after the passage
+    assert p.text[start:q0] == "I will show you a passage of text. After reading it, answer the following.\n\n"
+    assert p.text[q1:p0] == "\n\nHere is the passage:\n\n"
+
+
+def test_fill_user_message_rejects_bad_templates():
+    assert prompts_mod.fill_user_message("A {question} B {passage} C", "q", "p") == ("A q B p C", 2, 6)
+    for bad in ("{question} only", "{passage} {question}", "{question} {question} {passage}"):
+        with pytest.raises(ValueError):
+            prompts_mod.fill_user_message(bad, "q", "p")
+
+
+def test_position_sets_never_include_template_tokens(standin_model):
+    """M3's two position sets: 'question' = exactly the question-class tokens; 'message' = every
+    token of the user message -- and neither ever includes a chat-template token."""
+    stim = _load_stimuli()
+    p = prompts_mod.build_prompt(stim["passages"][0], "report", _fmt(standin_model, stim))
+    for name, classes in prompts_mod.POSITION_SETS.items():
+        m = prompts_mod.mask(p, set(classes), skip_first=0)
+        assert all(p.classes[i] != "template" for i in range(len(m)) if m[i]), name
+        assert all(bool(m[i]) == (p.classes[i] in classes) for i in range(len(m))), name
+    q = prompts_mod.mask(p, set(prompts_mod.POSITION_SETS["question"]), skip_first=0)
+    assert q.sum() == sum(c == "question" for c in p.classes) > 0
 
 
 def test_spans_reconstruct_sentences(standin_model):
@@ -93,10 +139,13 @@ def test_mask_rows_carry_everything_the_mask_figure_draws(standin_model):
 
 
 # Characters a tokenizer is KNOWN to add to a region, beyond the region's exact text, as
-# (before, after) -- decided with the human; anything else is a failure. The stand-in (M0) merges
-# the question's final period with the blank line after it into one token ".\n\n"; the real model's
-# tokenizer (M1) ends the question with a plain ".". Sentence spans in stimuli.json include the one
-# space before sentences 2-5 (the tokenizers attach it to the next word), so sentences match exactly.
+# (before, after) -- decided with the human; anything else is a failure. Regions: the question, each
+# sentence, and (since the paper's wrapper, 2026-09-11) each piece of instruction text. The stand-in
+# (M0) merged the question's final period with the blank line after it into one token ".\n\n" -- with
+# the wrapper that blank line is instruction text, so the stand-in case may now fail differently; the
+# human decided (2026-09-11) that the stand-in case may fail: only the real tokenizer matters from M1
+# on. The real model's tokenizer ends the question with a plain ".". Sentence spans in stimuli.json
+# include the one space before sentences 2-5 (the tokenizers attach it to the next word).
 KNOWN_EXTRA = {
     "standin": {"question": ("", "\n\n")},
     "real": {},
@@ -114,7 +163,7 @@ def test_region_tokens_spell_their_text_exactly(which, request):
     tok = (request.getfixturevalue("standin_model").tokenizer if which == "standin"
            else request.getfixturevalue("real_tokenizer"))
     stim = _load_stimuli()
-    fmt = {"tokenizer": tok, "questions": stim["questions"]}
+    fmt = prompts_mod.make_fmt(tok, stim, _prompt_format())
     problems = []
     for stimulus in stim["passages"]:
         for qkey in stim["questions"]:

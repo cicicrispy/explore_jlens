@@ -206,3 +206,86 @@ def test_finalize_run_leaves_the_manifest_untouched(tmp_path, monkeypatch):
     monkeypatch.setattr(io_mod, "upload_run", fake)
     io_mod.finalize_run(tmp_path, ["# s"])
     assert (tmp_path / "manifest.json").read_bytes() == before
+
+
+# ------------------------------------------------ local stand-in store, per-file uploads, fp16
+
+
+def test_local_store_mirrors_repo_relative_paths(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    run = Path("runs/M2/loading_1")
+    (run / "loadings").mkdir(parents=True)
+    (run / "loadings" / "sp_01_report.parquet").write_text("a")
+    (run / "figures" / "png").mkdir(parents=True)
+    (run / "figures" / "png" / "x.png").write_text("f")
+    store = io_mod.LocalStore("store")
+
+    store.upload_files(run, ["loadings/sp_01_report.parquet"])
+    assert store.exists(run / "loadings" / "sp_01_report.parquet")
+    assert store.list_files(run) == {"runs/M2/loading_1/loadings/sp_01_report.parquet"}
+    store.upload_path(run, exclude_figures=True)
+    assert not store.exists(run / "figures" / "png" / "x.png")      # figures are never uploaded
+    assert store.list_dirs("runs/M2") == {"loading_1"}
+    (run / "loadings" / "sp_01_report.parquet").unlink()
+    store.download(run / "loadings" / "sp_01_report.parquet")
+    assert (run / "loadings" / "sp_01_report.parquet").read_text() == "a"
+    assert store.list_files("runs/M9") == set() and store.list_dirs("runs/M9") == set()
+
+
+def test_finalize_run_never_uploads_figures_by_default(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    run = Path("runs/M2/loading_1")
+    (run / "figures" / "png").mkdir(parents=True)
+    (run / "figures" / "png" / "x.png").write_text("f")
+    (run / "data.parquet").write_text("d")
+    store = io_mod.LocalStore("store")
+    assert io_mod.finalize_run(run, ["# s"], store=store) is not None
+    assert store.list_files(run) == {f"{run.as_posix()}/data.parquet", f"{run.as_posix()}/summary.md"}
+
+
+def test_background_uploader_uploads_exactly_the_files_given(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    run = Path("runs/M3/r")
+    for name in ("records/a.parquet", "records/b.parquet", "details/a.parquet"):
+        (run / name).parent.mkdir(parents=True, exist_ok=True)
+        (run / name).write_text(name)
+    store = io_mod.LocalStore("store")
+    up = io_mod.BackgroundUploader(run, store=store)
+    up.trigger(files=["records/a.parquet", "details/a.parquet"])
+    up.flush(timeout=5)
+    up.shutdown()
+    assert store.list_files(run) == {f"{run.as_posix()}/records/a.parquet", f"{run.as_posix()}/details/a.parquet"}
+    assert up.uploaded == {"records/a.parquet", "details/a.parquet"} and not up.pending()
+
+
+def test_background_uploader_requeues_failed_files(tmp_path):
+    class Flaky:
+        calls = 0
+
+        def upload_files(self, run_dir, files):
+            Flaky.calls += 1
+            if Flaky.calls == 1:
+                raise RuntimeError("rate limited")
+            return "ok"
+
+    up = io_mod.BackgroundUploader("runs/M3/r", store=Flaky())
+    up.trigger(files=["records/a.parquet"])
+    up.flush(timeout=5)
+    assert up.n_failures == 1 and up.pending() == {"records/a.parquet"}  # kept for the next upload
+    up.trigger(files=["records/b.parquet"])
+    up.flush(timeout=5)
+    up.shutdown()
+    assert up.pending() == set() and up.uploaded == {"records/a.parquet", "records/b.parquet"}
+
+
+def test_records_table_keeps_full_vocab_vectors_in_fp16(tmp_path):
+    import pyarrow.parquet as pq
+
+    rows = [{"k": i, "logprobs_fp16": np.arange(5, dtype=np.float16) + i, "topk": [{"token": "a", "logit": 1.0}]}
+            for i in range(3)]
+    path = io_mod.write_parquet(io_mod.records_table(rows), tmp_path / "records" / "p.parquet")
+    t = pq.read_table(path)
+    assert str(t.schema.field("logprobs_fp16").type.value_type) == "halffloat"
+    df = pd.read_parquet(path)
+    assert np.array_equal(np.asarray(df["logprobs_fp16"][2], dtype=np.float16), np.arange(5, dtype=np.float16) + 2)
+    assert list(df["k"]) == [0, 1, 2] and sorted(p.name for p in path.parent.iterdir()) == ["p.parquet"]

@@ -32,7 +32,7 @@ def _make_swap_record(stimulus_id="sp_01", question_key="anomaly", direction="m2
         flip=True,
         top1_changed=True,
         logprobs_fp16=torch.zeros(4, dtype=torch.float16).numpy(),
-        top5=[("a", 0.1)],
+        topk=[("a", 0.1)],
         intervention_logs=logs,
         prompt_len=3,
         metric_pos=2,
@@ -105,3 +105,80 @@ def test_clean_key_ignores_direction_pair_layers_alpha():
     b.layers = [1, 2]
     b.alpha = 2.0
     assert runner._clean_key(a) == runner._clean_key(b) == _CLEAN_KEY
+
+
+# ----------------------------------------------------------- one prompt, every kind (stand-in)
+
+
+def _cfgs_and_cells(standin_model, random_lens, n_layers=3):
+    import json
+
+    import yaml
+
+    from jlens_spec import metrics
+    from jlens_spec import prompts as prompts_mod
+
+    with open("stimuli/stimuli.json") as f:
+        stim = json.load(f)
+    with open("configs/tokens.yaml") as f:
+        tokens_raw = yaml.safe_load(f)
+    with open("configs/prompt_format.yaml") as f:
+        fmt = prompts_mod.make_fmt(standin_model.tokenizer, stim, yaml.safe_load(f))
+    tok = standin_model.tokenizer
+    ids = [tok.encode(t, add_special_tokens=False)[0] for t in (" the", " a", " of")]
+    cfgs = {"stimuli": {s["id"]: s for s in stim["passages"]}, "fmt": fmt, "tokens_raw": tokens_raw,
+            "tokens_cfg": metrics.build_tokens_cfg(tok, tokens_raw), "skip_first": 0, "save_topk": 5,
+            "norm_scale": 1.0, "run_id": "test"}
+    layers = random_lens.layers[:n_layers]
+    common = dict(stimulus_id="sp_01", question_key="report", pair_name="space", layers=layers,
+                  position_set={"question"}, alpha=1.0, seed=0)
+    cells = []
+    for d in ("m2i", "i2m"):
+        cells += [runner.Cell(kind=k, direction=d, **common) for k in ("identity", "swap", "random_direction")]
+        cells.append(runner.Cell(kind="label_to_present", direction=d, control_index=0, control_tokens=[ids[0]],
+                                 control_text=[" the"], control_tier=1, **common))
+        cells.append(runner.Cell(kind="big_nonlabel", direction=d, control_index=0, control_tokens=[ids[1], ids[2]],
+                                 control_text=[" a", " of"], control_tier=1, **common))
+    return cfgs, cells, layers
+
+
+def test_run_prompt_runs_every_kind_and_records_where_the_stream_changed(standin_model, random_lens):
+    import numpy as np
+    import pandas as pd
+
+    cfgs, cells, layers = _cfgs_and_cells(standin_model, random_lens)
+    records, details = runner.run_prompt(standin_model, random_lens, cells, cfgs)
+    assert len(records) == len(cells) == 10
+    d = pd.DataFrame(details)
+    n = records[0].prompt_len
+    assert len(d) == len(cells) * len(layers) * n  # every cell x layer x position
+    # Only question positions are planned, and nothing changed anywhere else (else run_cell raises).
+    assert set(d.loc[d["planned"], "class"]) == {"question"}
+    assert (d.loc[~d["planned"], "change"] == 0).all()
+    assert (d.loc[(d["kind"] == "identity"), "change"] == 0).all()
+
+    by = {(r.kind, r.direction): r for r in records}
+    # identity is the clean pass: same in both directions, bitwise; every other cell compares to it
+    assert np.array_equal(by[("identity", "m2i")].logprobs_fp16, by[("identity", "i2m")].logprobs_fp16)
+    assert all(r.clean_margin == by[("identity", "m2i")].margin for r in records)
+    # the swap is symmetric in its two tokens: the two directions are the same edit
+    assert np.allclose(by[("swap", "m2i")].logprobs_fp16.astype(np.float32),
+                       by[("swap", "i2m")].logprobs_fp16.astype(np.float32), atol=1e-2)
+    assert by[("swap", "m2i")].s_token == by[("swap", "i2m")].t_token == " Spanish"
+    # big_nonlabel and random_direction are scaled to the treatment's ||delta h|| per position/layer
+    planned = d[d["planned"]].set_index(["direction", "layer", "pos"])
+    for kind in ("big_nonlabel", "random_direction"):
+        for direction in ("m2i", "i2m"):
+            got = planned[planned["kind"] == kind].loc[direction, "delta_h_norm"]
+            want = planned[planned["kind"] == "swap"].loc[direction, "delta_h_norm"]
+            assert np.allclose(got.sort_index().to_numpy(), want.sort_index().to_numpy(), rtol=1e-3, atol=1e-4)
+    assert records[0].topk and len(records[0].topk) == 5
+
+
+def test_an_edit_outside_the_plan_is_a_hard_failure(standin_model, random_lens, monkeypatch):
+    import pytest
+
+    cfgs, cells, _ = _cfgs_and_cells(standin_model, random_lens, n_layers=1)
+    monkeypatch.setattr(iv, "edit_problems", lambda changes, mask, kind: ([(0, 1, 0.5)], []))
+    with pytest.raises(RuntimeError, match="unplanned positions"):
+        runner.run_cell(standin_model, random_lens, cells[1], cfgs)

@@ -19,12 +19,17 @@ Per-milestone inputs (all inside the run folder):
         band_signatures.parquet
           + figure_params.json[motor_onset]  -> band_signatures
         (M1's tokens_* and download_* runs have no figures.)
-    M2: loadings.parquet
-          + figure_params.json[band, loading_heatmaps]
-                                             -> loading_heatmap_<stimulus>, loading_summary_bars
-    M3: records.parquet                      -> panel_c, margin_vs_deltac_{anomaly,report}
-`figure_params.json` holds the few scalars a figure needs that aren't a table (e.g. which band was
-used), written by the milestone script so figures never read configs/.
+    M2: loadings/<stimulus>_<question>.parquet
+          + figure_params.json[band, pairs]  -> loadings/<stimulus>_<question> (4 pairs x es/fr,
+                                                every layer, band dashed), loading_summary_bars
+    M3: records/<stimulus>_<question>.parquet -> panel_c, margin_vs_deltac_<question>
+        details/ + tokens/ (same file names)  -> masks/<stimulus>_<question> (5 kinds x 2
+                                                directions; red = where the stream ACTUALLY changed)
+    Several M3 runs: combined_panel_c (scripts/combine_panel_c.py) -- refuses runs that differ in
+        pair, band, position set, lens or model.
+`figure_params.json` holds the few values a figure needs that aren't a table (e.g. which band was
+used), written by the milestone script so figures never read configs/. No figure is ever uploaded:
+the data behind every figure is, and any figure can be redrawn from it.
 """
 from __future__ import annotations
 
@@ -48,10 +53,12 @@ __all__ = [
     "readout_grid",
     "cka_heatmap",
     "band_signatures",
-    "loading_heatmap",
+    "loading_heatmap_grid",
     "loading_summary_bars",
     "panel_c",
     "margin_vs_deltac",
+    "mask_grid",
+    "combined_panel_c",
 ]
 
 FORMATS = ("png", "pdf", "svg")
@@ -59,6 +66,7 @@ DPI = 150  # raster formats only
 
 CLASS_COLORS = {
     "template": "#cccccc",
+    "instruction": "#f5e6a8",  # the paper's wrapper text in the user message
     "question": "#7fb3ff",
     "matrix": "#7fdc7f",
     "intrusion": "#ffb37f",
@@ -177,20 +185,13 @@ def _token_label(text: str, token_id, max_len: int = 12) -> str:
 # --------------------------------------------------------------------------------------- M0
 
 
-def mask_figure(rows: pd.DataFrame):
-    """One prompt's position mask: one box per token showing its text and position index, colored
-    by class, red outline where edited, ★ on metric_pos, legend at the bottom. `rows` = that
-    prompt's rows of masks.parquet (see prompts.mask_rows)."""
-    plt = _plt()
-    from matplotlib.lines import Line2D
-    from matplotlib.patches import Patch, Rectangle
+def _draw_token_boxes(ax, rows: pd.DataFrame, cols: int = 12, fontsize: int = 8) -> None:
+    """One box per token (text + position index), colored by class, red outline where `edited`, ★ on
+    metric_pos. `rows`: pos, token_id, token_text, class, edited, is_metric_pos."""
+    from matplotlib.patches import Rectangle
 
     rows = rows.sort_values("pos")
-    n = len(rows)
-    cols = 12
-    n_rows = (n + cols - 1) // cols
-    fig, ax = plt.subplots(figsize=(cols * 1.35, n_rows * 0.62 + 1.2))
-
+    n_rows = (len(rows) + cols - 1) // cols
     # `class` is a Python keyword, which itertuples can't use as an attribute name.
     for r in rows.rename(columns={"class": "cls"}).itertuples(index=False):
         i = int(r.pos)
@@ -199,25 +200,44 @@ def mask_figure(rows: pd.DataFrame):
         ax.add_patch(Rectangle((x, y), 1, 1, facecolor=CLASS_COLORS.get(r.cls, "#ffffff"),
                                edgecolor="red" if edited else "black", linewidth=2.5 if edited else 0.6))
         ax.text(x + 0.5, y + 0.45, _token_label(r.token_text, r.token_id), ha="center", va="center",
-                fontsize=8, clip_on=True)
-        ax.text(x + 0.05, y + 0.93, str(i), ha="left", va="top", fontsize=5, color="#444444")
+                fontsize=fontsize, clip_on=True)
+        ax.text(x + 0.05, y + 0.93, str(i), ha="left", va="top", fontsize=max(4, fontsize - 3), color="#444444")
         if bool(r.is_metric_pos):
-            ax.plot(x + 0.88, y + 0.8, marker="*", color="black", markersize=11)
-
+            ax.plot(x + 0.88, y + 0.8, marker="*", color="black", markersize=fontsize + 3)
     ax.set_xlim(0, cols)
     ax.set_ylim(-0.05, n_rows + 0.05)
     ax.axis("off")
-    first = rows.iloc[0]
-    ax.set_title(f"{first['stimulus_id']} / {first['question_key']}   "
-                 f"({n} tokens, {int(rows['edited'].sum())} edited)", fontsize=11)
-    present = set(rows["class"])
-    legend = [Patch(facecolor=c, edgecolor="black", label=k) for k, c in CLASS_COLORS.items() if k in present]
-    legend += [Patch(facecolor="white", edgecolor="red", linewidth=2.5, label="edited (red outline)"),
+
+
+def _mask_legend(present_classes, edited_label: str = "edited (red outline)"):
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import Patch
+
+    legend = [Patch(facecolor=c, edgecolor="black", label=k) for k, c in CLASS_COLORS.items() if k in present_classes]
+    legend += [Patch(facecolor="white", edgecolor="red", linewidth=2.5, label=edited_label),
                Line2D([], [], marker="*", color="black", linestyle="", markersize=11,
                       label="metric_pos (answer read here)"),
                Patch(facecolor="none", edgecolor="none", label=NO_TEXT_NOTE)]
-    ax.legend(handles=legend, loc="upper center", bbox_to_anchor=(0.5, 0.0), ncol=7, fontsize=8,
-              frameon=False)
+    return legend
+
+
+def mask_figure(rows: pd.DataFrame):
+    """One prompt's position mask: one box per token showing its text and position index, colored
+    by class, red outline where edited, ★ on metric_pos, legend at the bottom. `rows` = that
+    prompt's rows of masks.parquet (see prompts.mask_rows)."""
+    plt = _plt()
+
+    rows = rows.sort_values("pos")
+    n = len(rows)
+    cols = 12
+    n_rows = (n + cols - 1) // cols
+    fig, ax = plt.subplots(figsize=(cols * 1.35, n_rows * 0.62 + 1.2))
+    _draw_token_boxes(ax, rows, cols)
+    first = rows.iloc[0]
+    ax.set_title(f"{first['stimulus_id']} / {first['question_key']}   "
+                 f"({n} tokens, {int(rows['edited'].sum())} edited)", fontsize=11)
+    ax.legend(handles=_mask_legend(set(rows["class"])), loc="upper center", bbox_to_anchor=(0.5, 0.0),
+              ncol=7, fontsize=8, frameon=False)
     return fig
 
 
@@ -281,26 +301,64 @@ def band_signatures(df: pd.DataFrame, motor_onset: int | None):
 # --------------------------------------------------------------------------------------- M2
 
 
-def loading_heatmap(df: pd.DataFrame, stimulus_id: str, token: str, question_key: str | None = None):
-    """(position x layer) cos heatmap for one prompt. A stimulus appears under 4 questions, so
-    `question_key` selects which prompt; if None, the first question present is used."""
+def _blocks(layers) -> list[tuple[int, int]]:
+    """Contiguous [start, end] blocks of a sorted layer list (a band may have several)."""
+    layers = sorted(int(l) for l in layers)
+    blocks, start = [], layers[0]
+    for a, b in zip(layers, layers[1:]):
+        if b != a + 1:
+            blocks.append((start, a))
+            start = b
+    blocks.append((start, layers[-1]))
+    return blocks
+
+
+def loading_heatmap_grid(df: pd.DataFrame, pairs: dict, band: list[int]):
+    """One prompt: a (position x layer) heatmap of cos(h, v_token) for every pair in `pairs`
+    ({name: [es word, fr word]}) -- rows = pairs, columns = the pair's Spanish and French member --
+    over every layer saved, with the band's edges drawn as dashed vertical lines and the position
+    classes marked on the right. All panels share one symmetric color scale. `df` = that prompt's
+    loadings rows (M2's loadings/<stimulus>_<question>.parquet)."""
     plt = _plt()
 
-    sub = df[(df["stimulus_id"] == stimulus_id) & (df["token"] == token)]
-    if question_key is None:
-        question_key = sorted(sub["question_key"].unique())[0]
-    sub = sub[sub["question_key"] == question_key]
-    pivot = sub.pivot(index="pos", columns="layer", values="cos")
-    fig, ax = plt.subplots(figsize=(max(6, 0.15 * pivot.shape[1]), max(4, 0.15 * pivot.shape[0])))
-    im = ax.imshow(pivot.values, aspect="auto", cmap="RdBu_r", vmin=-1, vmax=1)
-    ax.set_xticks(range(len(pivot.columns)))
-    ax.set_xticklabels(pivot.columns, fontsize=6, rotation=90)
-    ax.set_yticks(range(len(pivot.index)))
-    ax.set_yticklabels(pivot.index, fontsize=5)
-    ax.set_xlabel("layer")
-    ax.set_ylabel("position")
-    ax.set_title(f"{stimulus_id} / {question_key} / {token!r}")
-    fig.colorbar(im, ax=ax, label="cos")
+    first = df.iloc[0]
+    layers = sorted(df["layer"].unique())
+    n_pos = int(df["pos"].max()) + 1
+    cls = df.drop_duplicates("pos").set_index("pos")["class"].reindex(range(n_pos)).tolist()
+    vmax = max(float(df["cos"].abs().max()), 1e-6)
+    names = list(pairs)
+    fig, axes = plt.subplots(len(names), 2, figsize=(13, 3.2 * len(names) + 1), squeeze=False)
+    extent = [layers[0] - 0.5, layers[-1] + 0.5, n_pos - 0.5, -0.5]
+    im = None
+    for i, name in enumerate(names):
+        for j, (lang, word) in enumerate(zip(("es", "fr"), pairs[name])):
+            ax = axes[i][j]
+            sub = df[df["token"] == word]
+            if sub.empty:
+                ax.set_title(f"{name}: {word!r} -- no rows", fontsize=8)
+                ax.axis("off")
+                continue
+            grid = sub.pivot(index="pos", columns="layer", values="cos").reindex(index=range(n_pos), columns=layers)
+            im = ax.imshow(grid.values, aspect="auto", cmap="RdBu_r", vmin=-vmax, vmax=vmax, extent=extent,
+                           interpolation="nearest")
+            for a, b in _blocks(band):
+                for x in (a - 0.5, b + 0.5):
+                    ax.axvline(x, color="black", linestyle="--", linewidth=0.8)
+            for p in range(1, n_pos):  # class boundaries
+                if cls[p] != cls[p - 1]:
+                    ax.axhline(p - 0.5, color="#555555", linewidth=0.4)
+            starts = [p for p in range(n_pos) if p == 0 or cls[p] != cls[p - 1]]
+            for k, p in enumerate(starts):
+                end = starts[k + 1] if k + 1 < len(starts) else n_pos
+                ax.text(layers[-1] + 1.0, (p + end - 1) / 2, cls[p], fontsize=5, va="center", clip_on=False)
+            ax.set_title(f"{name} / {lang}: {word!r}", fontsize=8)
+            ax.set_xlabel("layer", fontsize=7)
+            ax.set_ylabel("position", fontsize=7)
+            ax.tick_params(labelsize=6)
+    if im is not None:
+        fig.colorbar(im, ax=axes, label="cos(h, v_token)", shrink=0.6)
+    fig.suptitle(f"{first['stimulus_id']} / {first['question_key']} -- loading of each pair member "
+                 f"(dashed = band {band[0]}..{band[-1]})", fontsize=10)
     return fig
 
 
@@ -432,6 +490,44 @@ def margin_vs_deltac(df: pd.DataFrame, question_key: str):
     return fig
 
 
+MASK_KINDS = ("identity", "swap", "label_to_present", "big_nonlabel", "random_direction")
+
+
+def mask_grid(tokens: pd.DataFrame, details: pd.DataFrame):
+    """One prompt's M3 mask sanity figure, drawn from where the stream ACTUALLY changed: a 5 x 2
+    grid -- rows = kinds, columns = directions. A token is outlined red if it changed at any layer
+    in any cell of that kind and direction (label_to_present and big_nonlabel: their 3 cells
+    combined -- they plan the same positions; details/ has every cell separately). `tokens` = the
+    prompt's rows of tokens/ (pos, token_id, token_text, class, is_metric_pos); `details` = its
+    rows of details/ (kind, direction, control_index, layer, pos, planned, change)."""
+    plt = _plt()
+
+    tokens = tokens.sort_values("pos")
+    directions = sorted(details["direction"].unique())
+    cols = 16
+    n_rows = (len(tokens) + cols - 1) // cols
+    fig, axes = plt.subplots(len(MASK_KINDS), len(directions), squeeze=False,
+                             figsize=(cols * 0.8 * len(directions), (n_rows * 0.42 + 0.6) * len(MASK_KINDS) + 1))
+    changed_at = details[details["change"] != 0].groupby(["kind", "direction"])["pos"].apply(set).to_dict()
+    planned = set(details.loc[details["planned"], "pos"])
+    for i, kind in enumerate(MASK_KINDS):
+        for j, direction in enumerate(directions):
+            ax = axes[i][j]
+            changed = changed_at.get((kind, direction), set())
+            _draw_token_boxes(ax, tokens.assign(edited=tokens["pos"].isin(changed)), cols, fontsize=6)
+            n_cells = details[(details["kind"] == kind) & (details["direction"] == direction)][
+                ["control_index"]].drop_duplicates().shape[0]
+            combined = f", {n_cells} cells combined" if n_cells > 1 else ""
+            ax.set_title(f"{kind} / {direction}{combined}: {len(changed)} changed, {len(planned)} planned",
+                         fontsize=8)
+    first = tokens.iloc[0]
+    fig.suptitle(f"{first['stimulus_id']} / {first['question_key']} -- where the stream actually changed",
+                 fontsize=11)
+    fig.legend(handles=_mask_legend(set(tokens["class"]), "changed at any layer (red outline)"),
+               loc="lower center", ncol=8, fontsize=8, frameon=False)
+    return fig
+
+
 # ----------------------------------------------------------------------- milestone registry
 
 
@@ -477,26 +573,89 @@ def _m1(run_dir: Path, formats, out_dir) -> list[Path]:
 
 
 def _m2(run_dir: Path, formats, out_dir) -> list[Path]:
-    if _missing(run_dir, "loadings.parquet", "figure_params.json"):
+    if _missing(run_dir, "loadings", "figure_params.json"):
         return []
-    df = pd.read_parquet(run_dir / "loadings.parquet")
     params = _params(run_dir)
     written = []
-    for h in params["loading_heatmaps"]:
-        fig = loading_heatmap(df, h["stimulus_id"], h["token"], h.get("question_key"))
-        written += save(fig, f"loading_heatmap_{h['stimulus_id']}", formats, run_dir, out_dir)
-    written += save(loading_summary_bars(df, params["band"]), "loading_summary_bars", formats, run_dir, out_dir)
+    parts = []
+    for f in sorted((run_dir / "loadings").glob("*.parquet")):
+        df = pd.read_parquet(f)
+        written += save(loading_heatmap_grid(df, params["pairs"], params["band"]), f"loadings/{f.stem}",
+                        formats, run_dir, out_dir)
+        parts.append(df[df["layer"].isin(params["band"])])
+    if parts:
+        written += save(loading_summary_bars(pd.concat(parts, ignore_index=True), params["band"]),
+                        "loading_summary_bars", formats, run_dir, out_dir)
     return written
+
+
+def read_records(run_dir, columns=_M3_COLUMNS) -> pd.DataFrame:
+    """An M3 run's records (one file per prompt in records/), without the full-vocabulary vectors
+    unless asked for."""
+    return pd.read_parquet(Path(run_dir) / "records", columns=list(columns))
 
 
 def _m3(run_dir: Path, formats, out_dir) -> list[Path]:
-    if _missing(run_dir, "records.parquet"):
+    if _missing(run_dir, "records"):
         return []
-    df = pd.read_parquet(run_dir / "records.parquet", columns=_M3_COLUMNS)
+    df = read_records(run_dir)
     written = save(panel_c(df), "panel_c", formats, run_dir, out_dir)
-    for q in ("anomaly", "report"):
+    for q in sorted(df["question_key"].unique()):
         written += save(margin_vs_deltac(df, q), f"margin_vs_deltac_{q}", formats, run_dir, out_dir)
+    if not _missing(run_dir, "details", "tokens"):
+        for f in sorted((run_dir / "details").glob("*.parquet")):
+            tok = run_dir / "tokens" / f.name
+            if not tok.exists():
+                print(f"[figures] skipping mask figure {f.stem}: tokens/{f.name} not found", file=sys.stderr)
+                continue
+            fig = mask_grid(pd.read_parquet(tok), pd.read_parquet(
+                f, columns=["kind", "direction", "control_index", "layer", "pos", "planned", "change"]))
+            written += save(fig, f"masks/{f.stem}", formats, run_dir, out_dir)
     return written
+
+
+# Settings two M3 runs must share to be drawn in one combined panel c.
+COMBINE_KEYS = ("pair_name", "band_layers", "position_set", "lens_sha", "model_revision")
+
+
+def combine_check(run_dirs) -> tuple[dict, list[str]]:
+    """What each run used (from its figure_params.json and records) and every mismatch in
+    COMBINE_KEYS. Git commits are returned for the record but never a reason to refuse."""
+    info = {}
+    for d in run_dirs:
+        d = Path(d)
+        params = _params(d)
+        rec = read_records(d, ["pair_name", "lens_sha", "model_revision", "git_commit", "position_set"])
+        info[d.name] = {
+            "pair_name": sorted(rec["pair_name"].unique().tolist()),
+            "band_layers": params.get("band_layers"),
+            "position_set": sorted({tuple(sorted(p)) for p in rec["position_set"]}),
+            "lens_sha": sorted(rec["lens_sha"].unique().tolist()),
+            "model_revision": sorted(rec["model_revision"].unique().tolist()),
+            "git_commits": sorted(rec["git_commit"].unique().tolist()),
+        }
+    problems = []
+    first = next(iter(info))
+    for key in COMBINE_KEYS:
+        values = {name: v[key] for name, v in info.items()}
+        # band_layers is one list per run; the others list every distinct value found in the run's
+        # records, which must be exactly one.
+        mixed = key != "band_layers" and any(len(v) != 1 for v in values.values())
+        if mixed or any(v != values[first] for v in values.values()):
+            problems.append(f"{key}: {values}")
+    return info, problems
+
+
+def combined_panel_c(run_dirs, formats=("png",), out_dir=None):
+    """One panel c over several M3 runs (e.g. positives + anomaly for one position set). Refuses
+    (ValueError) if the runs differ in pair, band, position set, lens or model. Returns the paths
+    written into `out_dir`."""
+    info, problems = combine_check(run_dirs)
+    if problems:
+        raise ValueError("these runs can't be combined into one panel c -- they differ in:\n  "
+                         + "\n  ".join(problems))
+    df = pd.concat([read_records(d) for d in run_dirs], ignore_index=True)
+    return save(panel_c(df), "panel_c_combined", formats, run_dir=None, out_dir=out_dir), info
 
 
 _MILESTONES = {"M0": _m0, "M1": _m1, "M2": _m2, "M3": _m3}

@@ -1,0 +1,14 @@
+# DRY RUN (Mac): M2 on the stand-in model with a random lens -- shows the pipeline runs end to end
+# (per-prompt files, resume, figures, summary). Numbers are meaningless. Nothing is uploaded: the
+# folder under `store` stands in for the HF dataset. Run folders: runs/dryrun/M2/loading_<time>/.
+#
+#   python scripts/m2_loading.py --experiment configs/experiments/dryrun/m2_loading.yaml
+
+name: loading
+milestone: M2
+save_topk: 100
+
+dryrun:
+  store: runs/dryrun/_hf                        # local stand-in for the HF dataset
+  lens_seed: 0
+  bands_file: configs/experiments/dryrun/bands.yaml

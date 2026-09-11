@@ -84,3 +84,84 @@ def test_name_suffix_goes_between_name_and_time(tmp_path):
     exp, files = _setup(tmp_path)
     run = runs.start_run("M0", exp, files, root=tmp_path / "runs", name_suffix="Qwen3.6-27B")
     assert re.fullmatch(r"smoke_Qwen3\.6-27B_\d{8}-\d{6}", run.run_id)
+
+
+# ------------------------------------------------------------------------------------ resume
+
+
+def _resume_setup(tmp_path, monkeypatch):
+    from jlens_spec import io as io_mod
+
+    monkeypatch.chdir(tmp_path)
+    exp = tmp_path / "exp_loading.yaml"
+    exp.write_text(yaml.safe_dump({"name": "loading", "milestone": "M2"}))
+    model = tmp_path / "model.yaml"
+    model.write_text(yaml.safe_dump({"hf_id": "a/b"}))
+    return exp, [model], io_mod.LocalStore("store")
+
+
+def _finish(run, store):
+    (run.dir / "summary.md").write_text("done")
+    store.upload_path(run.dir)
+
+
+def test_first_start_makes_a_new_run(tmp_path, monkeypatch):
+    exp, files, store = _resume_setup(tmp_path, monkeypatch)
+    run, resumed = runs.start_or_resume("M2", exp, files, store, root="runs")
+    assert not resumed and run.dir.parent.as_posix() == "runs/M2" and run.dir.name.startswith("loading_")
+
+
+def test_latest_unfinished_run_is_resumed_and_a_finished_one_is_not(tmp_path, monkeypatch):
+    exp, files, store = _resume_setup(tmp_path, monkeypatch)
+    a, _ = runs.start_or_resume("M2", exp, files, store, root="runs")
+    b, resumed = runs.start_or_resume("M2", exp, files, store, root="runs")
+    assert resumed and b.dir == a.dir                      # unfinished -> resumed
+    _finish(a, store)
+    c, resumed = runs.start_or_resume("M2", exp, files, store, root="runs")
+    assert not resumed and c.dir != a.dir                  # finished -> a new run
+
+
+def test_an_older_unfinished_run_is_never_picked_up_by_default(tmp_path, monkeypatch):
+    exp, files, store = _resume_setup(tmp_path, monkeypatch)
+    old, _ = runs.start_or_resume("M2", exp, files, store, root="runs")        # abandoned, unfinished
+    newer, _ = runs.start_or_resume("M2", exp, files, store, root="runs", fresh=True)
+    _finish(newer, store)
+    nxt, resumed = runs.start_or_resume("M2", exp, files, store, root="runs")
+    assert not resumed and nxt.dir not in (old.dir, newer.dir)
+    again, resumed = runs.start_or_resume("M2", exp, files, store, root="runs", resume=old.dir)
+    assert resumed and again.dir == old.dir                # only when named explicitly
+
+
+def test_a_finished_run_is_never_resumed(tmp_path, monkeypatch):
+    exp, files, store = _resume_setup(tmp_path, monkeypatch)
+    a, _ = runs.start_or_resume("M2", exp, files, store, root="runs")
+    _finish(a, store)
+    with pytest.raises(SystemExit, match="already finished"):
+        runs.start_or_resume("M2", exp, files, store, root="runs", resume=a.dir)
+
+
+def test_resume_keeps_its_settings_copy_and_reports_changes(tmp_path, monkeypatch, capsys):
+    exp, files, store = _resume_setup(tmp_path, monkeypatch)
+    a, _ = runs.start_or_resume("M2", exp, files, store, root="runs")
+    files[0].write_text(yaml.safe_dump({"hf_id": "c/d"}))
+    b, resumed = runs.start_or_resume("M2", exp, files, store, root="runs")
+    assert resumed and b.load("model.yaml")["hf_id"] == "a/b"
+    assert runs.settings_diff(b) == ["model.yaml"]
+    assert "model.yaml" in capsys.readouterr().out
+
+
+def test_resume_on_a_new_machine_fetches_the_run_from_the_store(tmp_path, monkeypatch):
+    import shutil
+
+    exp, files, store = _resume_setup(tmp_path, monkeypatch)
+    a, _ = runs.start_or_resume("M2", exp, files, store, root="runs")
+    (a.dir / "loadings").mkdir()
+    (a.dir / "loadings" / "sp_01_report.parquet").write_text("x")
+    store.upload_path(a.dir)
+    shutil.rmtree("runs")                                  # a new machine: nothing local
+    b, resumed = runs.start_or_resume("M2", exp, files, store, root="runs")
+    assert resumed and b.run_id == a.run_id and (b.dir / "settings" / "model.yaml").exists()
+    assert runs.uploaded_files(b.dir, store) >= {"loadings/sp_01_report.parquet", "manifest.json"}
+    assert not (b.dir / "loadings" / "sp_01_report.parquet").exists()
+    assert runs.sync_down(b.dir, store) == ["loadings/sp_01_report.parquet"]
+    assert (b.dir / "loadings" / "sp_01_report.parquet").read_text() == "x"

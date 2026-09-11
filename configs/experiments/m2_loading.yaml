@@ -1,0 +1,17 @@
+# M2 (Phase B, GPU): clean pass, no interventions -- scripts/m2_loading.py. Hand-written. Copied into
+# the run folder's settings/ when a run starts; the run reads that copy.
+#
+#   python scripts/m2_loading.py            # uses this file; resumes the latest run if it is unfinished
+#   python scripts/m2_loading.py --fresh    # always a new run
+#
+# Refuses to start until configs/bands.yaml is complete and consistent (all three bands, nested) and
+# the M1 validation run below is finished with its causal positive control passed.
+
+name: loading        # run folders: runs/M2/loading_<UTC start time>/
+milestone: M2
+
+# REQUIRED: the folder name of your finished M1 validation run, e.g. validate_20260912-031000
+# (runs/M1/<this>/). Its check3_positive_control.yaml must say passed: true.
+m1_validate_run: null
+
+save_topk: 100       # top tokens saved per position x layer (and for the answer); M3's control pool

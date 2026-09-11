@@ -1,0 +1,7 @@
+# DRY RUN ONLY (Mac, stand-in Qwen3-0.6B: 28 layers, random lens over layers 0..26). These bands only
+# exercise the code -- they mean nothing. The real bands live in configs/bands.yaml (filled by the
+# human from M1's CKA figure). Same rules as the real file (env.check_bands): all three filled,
+# full starts at the workspace onset, workspace inside full, early_late inside workspace.
+workspace: [9, 18]              # the stand-in's middle third
+full: [9, 26]                   # 26 = the random lens's last layer
+early_late: [[9, 13], [16, 18]] # a split band: dry-run chain 2 edits these layers (band: early_late)

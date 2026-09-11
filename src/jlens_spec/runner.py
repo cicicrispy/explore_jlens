@@ -1,34 +1,36 @@
-"""Cell/grid orchestration.
+"""Cell/grid orchestration (M3).
 
 ORCHESTRATION ASSUMPTIONS (flagged; the spec fixes the math and the outputs but not every wiring
 detail between modules -- documented here rather than guessed silently):
 
 - `cfgs` bundles runtime context not carried by `Cell` itself: `stimuli` (dict[id -> stimulus]),
-  `fmt` (for prompts.build_prompt: prompt_format.yaml fields + "tokenizer" + "questions"),
-  `tokens_raw` (raw configs/tokens.yaml), `tokens_cfg` (metrics.build_tokens_cfg output),
-  `skip_first`, `config_hash`, `lens_sha`, `model_revision`. `run_grid` also injects `clean_cache`.
+  `fmt` (for prompts.build_prompt, see prompts.make_fmt), `tokens_raw` (raw configs/tokens.yaml),
+  `tokens_cfg` (metrics.build_tokens_cfg output), `skip_first`, `save_topk`, `norm_scale`,
+  `config_hash`, `lens_sha`, `model_revision`, `run_id`. `run_prompt` also injects `clean_cache`.
 - Direction mapping: `pairs.<name>` is always ordered (es, fr). For a stimulus with matrix_lang and
   intrusion_lang in {es, fr}, "m2i" swaps FROM the matrix-language pair member TO the
-  intrusion-language member at the (question-only) intervened positions; "i2m" reverses it.
-- `run_grid` groups cells by prompt and runs `identity`, then `swap`, then the rest. `identity`
-  populates `clean_cache` keyed by `_clean_key` (prompt only); `swap` populates `target_norms` keyed
-  by `_norms_key` (prompt, direction, pair, layer set, alpha), which `big_nonlabel` /
+  intrusion-language member at the intervened positions; "i2m" reverses it
+  (controls.treatment_rows is the same mapping). The swap is symmetric in its two tokens, so the two
+  directions' swap / big_nonlabel / random_direction cells are the same edit; only
+  label_to_present differs (it removes a different label). Both are run (the literal grid).
+- Control-token cells (label_to_present, big_nonlabel) carry their control in the Cell itself
+  (`control_tokens`, picked automatically -- controls.py), several per kind (`control_index`).
+- `run_prompt` runs one prompt's cells: `identity`, then `swap`, then the rest. `identity` populates
+  `clean_cache` keyed by `_clean_key` (prompt only); `swap` populates `target_norms` keyed by
+  `_norms_key` (prompt, direction, pair, layer set, alpha), which `big_nonlabel` /
   `random_direction` cells with the same key are scaled against.
-- **Running a subset of kinds** (e.g. only `big_nonlabel` while iterating on `norm_scale`, or
-  skipping `identity` because you don't care about `flip` yet) is supported without re-running the
-  cells it would normally depend on: pass pre-computed `target_norms_cache` (keyed the same way as
-  the internal grouping) and/or a pre-populated `cfgs["clean_cache"]`, built from a previous run's
-  records via `target_norms_cache_from_records` / `clean_cache_from_records` below. `scripts/
-  m3_grid.py`'s official M3 run still runs all 5 kinds together every time, per the spec's hygiene
-  invariant #7 (no treatment cell without its controls in the same run) -- this flexibility is for
-  ad hoc/exploratory use, not a change to what M3 itself runs.
+- **Running a subset of kinds** (e.g. only `big_nonlabel` while iterating on `norm_scale`) is
+  supported without re-running the cells it would normally depend on: pass pre-computed
+  `target_norms_cache` and/or a pre-populated `cfgs["clean_cache"]`, built from a previous run's
+  records via `target_norms_cache_from_records` / `clean_cache_from_records`. The official M3 runs
+  always run all kinds together (hygiene invariant #7); this is for ad hoc use only.
 """
 from __future__ import annotations
 
 import dataclasses
 import time
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import SimpleNamespace
 
 import numpy as np
@@ -36,12 +38,11 @@ import torch
 
 from . import env as env_mod
 from . import interventions as iv
-from . import io as io_mod
 from . import metrics
 from . import prompts as prompts_mod
 
 
-@dataclass
+@dataclass(kw_only=True)
 class Cell:
     stimulus_id: str
     question_key: str
@@ -49,19 +50,23 @@ class Cell:
     pair_name: str
     kind: str        # "swap" | "label_to_present" | "big_nonlabel" | "random_direction" | "identity"
     layers: list
-    position_set: set
+    position_set: set  # position classes edited, e.g. {"question"}
     alpha: float
     seed: int
+    control_index: int = -1        # label_to_present / big_nonlabel: which of the run's controls (0, 1, 2)
+    control_tokens: list = field(default_factory=list)  # token ids: [target] or [a, b]
+    control_text: list = field(default_factory=list)    # their text, for the record
+    control_tier: int = 0          # 1 (>=100%), 2 (>=75%), 3 (below 75%); 0 = not a control-token cell
 
 
-@dataclass
+@dataclass(kw_only=True)
 class CellRecord(Cell):
     margin: float
     clean_margin: float          # NaN when no clean baseline was available
     flip: bool | None            # None when no clean baseline was available
     top1_changed: bool | None    # None when no clean baseline was available
     logprobs_fp16: np.ndarray
-    top5: list
+    topk: list                   # the model's top-`save_topk` next tokens at metric_pos
     intervention_logs: list
     prompt_len: int
     metric_pos: int
@@ -72,6 +77,11 @@ class CellRecord(Cell):
     timestamp: float
     answer_label: str   # extra vs. the literal spec list: needed to compute `flip` for later cells
     top1_id: int         # extra vs. the literal spec list: needed to compute `top1_changed`
+    s_token: str = ""    # the treatment pair's source / target words for this direction
+    t_token: str = ""
+    n_planned: int = 0            # planned (masked) positions
+    n_planned_unchanged: int = 0  # (layer, position) entries planned but measured unchanged
+    run_id: str = ""
 
 
 def _resolve_pair_words(cfgs: dict, cell: Cell, matrix_lang: str) -> tuple[str, str]:
@@ -85,31 +95,28 @@ def _resolve_pair_words(cfgs: dict, cell: Cell, matrix_lang: str) -> tuple[str, 
     raise ValueError(f"unknown direction {cell.direction!r}")
 
 
-def run_cell(model, lens, cell: Cell, cfgs: dict, target_norms: dict | None = None) -> CellRecord:
+def run_cell(model, lens, cell: Cell, cfgs: dict, target_norms: dict | None = None):
+    """Run one cell. Returns (CellRecord, detail rows). The detail rows -- one per band layer x
+    prompt position -- hold where the stream ACTUALLY changed (measured at every position, not only
+    the planned ones) next to the planned intervention's log (hygiene invariant 4). A change at any
+    position outside the plan raises RuntimeError: that is a hard failure."""
     stimulus = cfgs["stimuli"][cell.stimulus_id]
     matrix_lang = stimulus["matrix_lang"]
 
     prompt = prompts_mod.build_prompt(stimulus, cell.question_key, cfgs["fmt"])
-    mask = prompts_mod.mask(prompt, cell.position_set, skip_first=cfgs.get("skip_first", 4))
+    mask = prompts_mod.mask(prompt, set(cell.position_set), skip_first=cfgs.get("skip_first", 0))
     s_token, t_token = _resolve_pair_words(cfgs, cell, matrix_lang)
 
-    controls = cfgs["tokens_raw"]["controls"]
     if cell.kind == "swap":
         kw = dict(s_token=s_token, t_token=t_token, alpha=cell.alpha)
     elif cell.kind == "label_to_present":
-        target = controls["label_to_present"]["target"]
-        assert target is not None, "controls.label_to_present.target is null; M3 must not run"
-        kw = dict(source_token=s_token, target_token=target, alpha=cell.alpha)
+        assert len(cell.control_tokens) == 1, "label_to_present needs exactly one control token"
+        kw = dict(source_token=s_token, target_token=int(cell.control_tokens[0]), alpha=cell.alpha)
     elif cell.kind == "big_nonlabel":
-        pair_bn = controls["big_nonlabel"]["pair"]
-        assert pair_bn is not None, "controls.big_nonlabel.pair is null; M3 must not run"
+        assert len(cell.control_tokens) == 2, "big_nonlabel needs a control token pair"
         assert target_norms is not None, "big_nonlabel requires target_norms from the treatment cell"
-        kw = dict(
-            a_token=pair_bn[0],
-            b_token=pair_bn[1],
-            target_norms=target_norms,
-            norm_scale=controls["big_nonlabel"].get("norm_scale", 1.0),
-        )
+        kw = dict(a_token=int(cell.control_tokens[0]), b_token=int(cell.control_tokens[1]),
+                  target_norms=target_norms, norm_scale=cfgs.get("norm_scale", 1.0))
     elif cell.kind == "random_direction":
         assert target_norms is not None, "random_direction requires target_norms from the treatment cell"
         kw = dict(target_norms=target_norms, seed=cell.seed)
@@ -118,14 +125,19 @@ def run_cell(model, lens, cell: Cell, cfgs: dict, target_norms: dict | None = No
     else:
         raise ValueError(f"unknown kind {cell.kind!r}")
 
-    logits, logs = iv.apply(model, lens, prompt, cell.kind, cell.layers, mask, **kw)
+    logits, logs, changes = iv.apply(model, lens, prompt, cell.kind, cell.layers, mask, return_changes=True, **kw)
+    outside, unchanged = iv.edit_problems(changes, mask, cell.kind)
+    if outside:
+        raise RuntimeError(f"{cell.stimulus_id}/{cell.question_key} {cell.direction} {cell.kind}"
+                           f"[{cell.control_index}]: the stream changed at unplanned positions "
+                           f"(layer, pos, size): {outside[:10]} -- hard failure, nothing saved for this prompt")
+
     logprobs = torch.log_softmax(logits, dim=-1)
     margin = metrics.question_margin(cell.question_key, logprobs, cfgs["tokens_cfg"], matrix_lang)
     answer_label = metrics.argmax_label(cell.question_key, logprobs, cfgs["tokens_cfg"], matrix_lang)
     top1_id = int(torch.argmax(logits))
 
-    clean_key = _clean_key(cell)
-    clean = cfgs.get("clean_cache", {}).get(clean_key)
+    clean = cfgs.get("clean_cache", {}).get(_clean_key(cell))
     if cell.kind == "identity":
         clean_margin, flip, top1_changed = margin, False, False
     elif clean is None:
@@ -136,26 +148,14 @@ def run_cell(model, lens, cell: Cell, cfgs: dict, target_norms: dict | None = No
         flip = answer_label != clean.answer_label
         top1_changed = top1_id != clean.top1_id
 
-    tokenizer = model.tokenizer
-    top5_vals, top5_ids = torch.topk(logits, 5)
-    top5 = [{"token": tokenizer.decode([int(i)]), "logit": float(v)} for v, i in zip(top5_vals, top5_ids)]
-
-    return CellRecord(
-        stimulus_id=cell.stimulus_id,
-        question_key=cell.question_key,
-        direction=cell.direction,
-        pair_name=cell.pair_name,
-        kind=cell.kind,
-        layers=cell.layers,
-        position_set=cell.position_set,
-        alpha=cell.alpha,
-        seed=cell.seed,
+    record = CellRecord(
+        **{f.name: getattr(cell, f.name) for f in dataclasses.fields(Cell)},
         margin=margin,
         clean_margin=clean_margin,
         flip=flip,
         top1_changed=top1_changed,
         logprobs_fp16=logprobs.to(torch.float16).cpu().numpy(),
-        top5=top5,
+        topk=metrics.topk_tokens(logits, model.tokenizer, cfgs.get("save_topk", 100)),
         intervention_logs=logs,
         prompt_len=len(prompt.input_ids),
         metric_pos=prompt.metric_pos,
@@ -166,7 +166,35 @@ def run_cell(model, lens, cell: Cell, cfgs: dict, target_norms: dict | None = No
         timestamp=time.time(),
         answer_label=answer_label,
         top1_id=top1_id,
+        s_token=s_token,
+        t_token=t_token,
+        n_planned=int(mask.sum()),
+        n_planned_unchanged=len(unchanged),
+        run_id=cfgs.get("run_id", ""),
     )
+    return record, _detail_rows(cell, prompt, mask, logs, changes)
+
+
+def _detail_rows(cell: Cell, prompt, mask, logs, changes) -> list[dict]:
+    """One row per (layer, position): the measured change next to the planned intervention's log."""
+    by_lp = {(lg.layer, lg.pos): lg for lg in logs}
+    planned = mask.tolist()
+    nan = float("nan")
+    rows = []
+    for layer, sizes in sorted(changes.items()):
+        for pos, size in enumerate(sizes):
+            lg = by_lp.get((layer, pos))
+            rows.append({
+                "stimulus_id": cell.stimulus_id, "question_key": cell.question_key,
+                "direction": cell.direction, "kind": cell.kind, "control_index": cell.control_index,
+                "layer": int(layer), "pos": pos, "class": prompt.classes[pos], "planned": bool(planned[pos]),
+                "change": float(size),
+                "c_before_0": lg.c_before[0] if lg else nan, "c_before_1": lg.c_before[1] if lg else nan,
+                "c_after_0": lg.c_after[0] if lg else nan, "c_after_1": lg.c_after[1] if lg else nan,
+                "delta_c_norm": lg.delta_c_norm if lg else nan, "delta_h_norm": lg.delta_h_norm if lg else nan,
+                "alpha": lg.alpha if lg else nan,
+            })
+    return rows
 
 
 def _clean_key(rd) -> tuple:
@@ -184,7 +212,6 @@ def _norms_key(rd) -> tuple:
             tuple(sorted(int(l) for l in g("layers"))), float(g("alpha")))
 
 
-
 def _target_norms_from_logs(record: CellRecord) -> dict:
     by_layer_pos = {}
     for log in record.intervention_logs:
@@ -198,9 +225,9 @@ def _target_norms_from_logs(record: CellRecord) -> dict:
 
 
 def target_norms_cache_from_records(records) -> dict:
-    """Build a `target_norms_cache` (see `run_grid`) from a previous run's `swap` records -- either
+    """Build a `target_norms_cache` (see `run_prompt`) from a previous run's `swap` records -- either
     live `CellRecord`s or rows read back from parquet (plain dicts; `intervention_logs` then comes
-    back as a list of dicts too, since `io.append_records` flattens dataclasses for storage). Lets
+    back as a list of dicts too, since the parquet writers flatten dataclasses for storage). Lets
     `big_nonlabel`/`random_direction` be run later, standalone, without re-running `swap`."""
     cache = {}
     for r in records:
@@ -233,48 +260,33 @@ def clean_cache_from_records(records) -> dict:
     return cache
 
 
-def run_grid(model, lens, cells: list, cfgs: dict, out_path, uploader=None, target_norms_cache: dict | None = None):
-    """Yields CellRecords, writing each to `out_path` (parquet) as it's produced.
+KIND_ORDER = {"identity": 0, "swap": 1, "label_to_present": 2, "big_nonlabel": 3, "random_direction": 4}
 
-    Cells are grouped by prompt (stimulus_id, question_key); within a prompt, `identity` cells run
-    first, then `swap`, then the rest (by convention, not requirement). `identity` feeds
-    `cfgs["clean_cache"]`, keyed by prompt only (a clean pass doesn't depend on direction, pair,
-    layers or alpha). `swap` feeds `target_norms`, keyed by `_norms_key` (prompt, direction, pair,
-    layer set, alpha), so two swaps with different bands or alphas in one call can never hand their
-    norms to each other's controls.
 
-    To run a subset of kinds without the cells they'd otherwise depend on: pass a pre-populated
-    `cfgs["clean_cache"]` (skip needing `identity`) and/or `target_norms_cache` (skip needing
-    `swap`), both buildable from a previous run's records via `clean_cache_from_records` /
-    `target_norms_cache_from_records`. A group that needs `target_norms` (has a `big_nonlabel` or
-    `random_direction` cell) and has neither a `swap` cell in `cells` nor an entry in
-    `target_norms_cache` still raises clearly in `run_cell` -- scaling those controls against
-    nothing would be meaningless, not just unspecified.
+def run_prompt(model, lens, cells: list, cfgs: dict, target_norms_cache: dict | None = None):
+    """Run every cell of ONE prompt, `identity` first, then `swap`, then the controls (see the
+    module docstring). Returns (records, detail rows). `cfgs["clean_cache"]` and
+    `target_norms_cache` are updated in place so later prompts/cells can reuse them."""
+    keys = {_clean_key(c) for c in cells}
+    assert len(keys) == 1, f"run_prompt expects the cells of one prompt, got {sorted(keys)}"
+    cfgs.setdefault("clean_cache", {})
+    target_norms_cache = {} if target_norms_cache is None else target_norms_cache
+    records, details = [], []
+    for c in sorted(cells, key=lambda c: (KIND_ORDER.get(c.kind, 99), c.direction, c.control_index)):
+        tn = target_norms_cache.get(_norms_key(c)) if c.kind in ("big_nonlabel", "random_direction") else None
+        record, rows = run_cell(model, lens, c, cfgs, target_norms=tn)
+        if c.kind == "identity":
+            cfgs["clean_cache"][_clean_key(c)] = record
+        if c.kind == "swap":
+            target_norms_cache[_norms_key(c)] = _target_norms_from_logs(record)
+        records.append(record)
+        details += rows
+    return records, details
 
-    `uploader`, if given an `io.BackgroundUploader`, has `.trigger()` called after every record is
-    appended -- this runs `hf upload` on a background thread (at most one at a time; see
-    `io.BackgroundUploader`) so syncing the growing parquet off the GPU box never stalls the trace
-    loop here. The caller is responsible for constructing the uploader and calling `.flush()` after
-    this generator is exhausted, to block until the final upload has actually landed."""
+
+def group_by_prompt(cells: list) -> dict:
+    """{(stimulus_id, question_key): [cells]}, in the order prompts first appear."""
     groups = defaultdict(list)
     for c in cells:
         groups[_clean_key(c)].append(c)
-
-    kind_order = {"identity": 0, "swap": 1, "label_to_present": 2, "big_nonlabel": 3, "random_direction": 4}
-    cfgs = dict(cfgs)
-    cfgs["clean_cache"] = dict(cfgs.get("clean_cache", {}))
-    target_norms_cache = dict(target_norms_cache or {})
-
-    for key, group_cells in groups.items():
-        group_cells = sorted(group_cells, key=lambda c: kind_order.get(c.kind, 99))
-        for c in group_cells:
-            tn = target_norms_cache.get(_norms_key(c)) if c.kind in ("big_nonlabel", "random_direction") else None
-            record = run_cell(model, lens, c, cfgs, target_norms=tn)
-            if c.kind == "identity":
-                cfgs["clean_cache"][key] = record
-            if c.kind == "swap":
-                target_norms_cache[_norms_key(c)] = _target_norms_from_logs(record)
-            io_mod.append_records([record], out_path)
-            if uploader is not None:
-                uploader.trigger()
-            yield record
+    return dict(groups)

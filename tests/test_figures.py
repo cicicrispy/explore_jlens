@@ -4,6 +4,7 @@ written with the same writers the milestone scripts use, so the parquet round-tr
 numpy arrays, None in bool columns) is exercised."""
 import json
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -55,47 +56,83 @@ def test_m1_from_parquet(tmp_path):
     assert tmp_path / "figures" / "pdf" / "masks" / "check3_swap_alpha1.pdf" in written
 
 
+_PAIRS = {"plain": ["Spanish", "French"], "space": [" Spanish", " French"]}
+
+
 def test_m2_from_parquet(tmp_path):
-    rows = [{"stimulus_id": sid, "question_key": q, "pos": pos, "class": cls, "layer": l,
-             "token": tok, "cos": 0.1 * l, "rank": 5}
-            for sid in ("sp_01", "fr_01") for q in ("report", "anomaly")
-            for pos, cls in ((4, "question"), (9, "matrix")) for l in (3, 4)
-            for tok in ("Spanish", "French")]
-    io_mod.append_records(rows, tmp_path / "loadings.parquet")
-    (tmp_path / "figure_params.json").write_text(json.dumps({
-        "band": [3, 4],
-        "loading_heatmaps": [{"stimulus_id": "sp_01", "token": "Spanish"},
-                             {"stimulus_id": "fr_01", "token": "French"}]}))
+    """One loading grid per prompt (every pair's es/fr member x every saved layer) + the bars."""
+    for sid in ("sp_01", "fr_01"):
+        rows = [{"stimulus_id": sid, "question_key": "report", "pos": pos, "class": cls, "layer": l,
+                 "token": tok, "token_id": 1, "cos": 0.1 * l - 0.2, "rank": 5}
+                for pos, cls in ((0, "template"), (1, "instruction"), (4, "question"), (9, "matrix"))
+                for l in (2, 3, 4, 5) for tok in ("Spanish", "French", " Spanish", " French")]
+        io_mod.write_parquet(rows, tmp_path / "loadings" / f"{sid}_report.parquet")
+    (tmp_path / "figure_params.json").write_text(json.dumps({"band": [3, 4], "pairs": _PAIRS}))
 
     written = figures.make_figures(tmp_path, milestone="M2")
-    assert _files(written) == ["loading_heatmap_fr_01.png", "loading_heatmap_sp_01.png",
-                               "loading_summary_bars.png"]
+    assert _files(written) == ["fr_01_report.png", "loading_summary_bars.png", "sp_01_report.png"]
+    assert tmp_path / "figures" / "png" / "loadings" / "sp_01_report.png" in written
+
+
+def _m3_run(run_dir, pair="space", lens_sha="L", position_set=("question",)):
+    """A synthetic M3 run folder written with the same writers the script uses."""
+    for sid in ("sp_01", "fr_01"):
+        for q in ("anomaly", "report"):
+            name = f"{sid}_{q}"
+            recs, details = [], []
+            for d in ("m2i", "i2m"):
+                for kind, ci in (("identity", -1), ("swap", -1), ("random_direction", -1),
+                                 ("label_to_present", 0), ("big_nonlabel", 0)):
+                    logs = [] if kind == "identity" else [
+                        {"pos": 2, "layer": 3, "c_before": [0.1, 0.2], "c_after": [0.2, 0.1],
+                         "delta_c_norm": 0.3, "delta_h_norm": 1.0, "alpha": 1.0, "kind": kind}]
+                    recs.append({"stimulus_id": sid, "question_key": q, "direction": d, "kind": kind,
+                                 "control_index": ci, "flip": None if kind == "random_direction" and sid == "fr_01"
+                                 else kind == "swap", "margin": 0.5, "intervention_logs": logs,
+                                 "pair_name": pair, "lens_sha": lens_sha, "model_revision": "main",
+                                 "git_commit": "abc", "position_set": list(position_set),
+                                 "logprobs_fp16": np.zeros(8, dtype=np.float16)})
+                    for pos in range(4):
+                        details.append({"kind": kind, "direction": d, "control_index": ci, "layer": 3, "pos": pos,
+                                        "planned": pos == 2, "change": 1.0 if pos == 2 and kind != "identity" else 0.0})
+            io_mod.write_parquet(io_mod.records_table(recs), run_dir / "records" / f"{name}.parquet")
+            io_mod.write_parquet(details, run_dir / "details" / f"{name}.parquet")
+            io_mod.write_parquet([{"stimulus_id": sid, "question_key": q, "pos": i, "token_id": 10 + i,
+                                   "token_text": t, "class": c, "edited": i == 2, "is_metric_pos": i == 3}
+                                  for i, (t, c) in enumerate([("<|im_start|>", "template"), ("I", "instruction"),
+                                                              ("What", "question"), ("", "template")])],
+                                 run_dir / "tokens" / f"{name}.parquet")
+    (run_dir / "figure_params.json").write_text(json.dumps({"band_layers": [3], "position_set": position_set[0]}))
+    return run_dir
 
 
 def test_m3_from_parquet_round_trip(tmp_path):
     """The bug this guards: rows read back from parquet carry intervention_logs as numpy arrays
-    (`if not logs` raised) and flip as None/bool objects."""
-    rows = []
-    for sid in ("sp_01", "fr_01"):
-        for q in ("anomaly", "report"):
-            for kind in ("identity", "swap", "random_direction"):
-                logs = [] if kind == "identity" else [
-                    {"pos": 5, "layer": 3, "c_before": [0.1, 0.2], "c_after": [0.2, 0.1],
-                     "delta_c_norm": 0.3, "delta_h_norm": 1.0, "alpha": 1.0, "kind": kind}]
-                rows.append({"stimulus_id": sid, "question_key": q, "direction": "m2i", "kind": kind,
-                             "flip": None if kind == "random_direction" and sid == "fr_01" else kind == "swap",
-                             "margin": 0.5, "intervention_logs": logs, "logprobs_fp16": [0.0] * 8})
-    io_mod.append_records(rows, tmp_path / "records.parquet")
-
+    (`if not logs` raised) and flip as None/bool objects. Plus one 5x2 mask figure per prompt."""
+    _m3_run(tmp_path)
     written = figures.make_figures(tmp_path, formats=("png", "svg"), milestone="M3")
-    assert _files(written) == sorted(f"{n}.{fmt}" for n in ("panel_c", "margin_vs_deltac_anomaly",
-                                                             "margin_vs_deltac_report")
-                                     for fmt in ("png", "svg"))
+    names = ["panel_c", "margin_vs_deltac_anomaly", "margin_vs_deltac_report"] + \
+        [f"{s}_{q}" for s in ("sp_01", "fr_01") for q in ("anomaly", "report")]
+    assert _files(written) == sorted(f"{n}.{fmt}" for n in names for fmt in ("png", "svg"))
+    assert tmp_path / "figures" / "png" / "masks" / "sp_01_report.png" in written
+
+
+def test_combined_panel_c_refuses_runs_that_differ(tmp_path):
+    a = _m3_run(tmp_path / "a")
+    b = _m3_run(tmp_path / "b")
+    paths, info = figures.combined_panel_c([a, b], formats=("png",), out_dir=tmp_path / "out")
+    assert [p.name for p in paths] == ["panel_c_combined.png"] and set(info) == {"a", "b"}
+    c = _m3_run(tmp_path / "c", pair="plain")
+    with pytest.raises(ValueError, match="pair_name"):
+        figures.combined_panel_c([a, c], out_dir=tmp_path / "out2")
+    m = _m3_run(tmp_path / "m", position_set=("instruction", "question", "matrix", "intrusion"))
+    with pytest.raises(ValueError, match="position_set"):
+        figures.combined_panel_c([a, m], out_dir=tmp_path / "out3")
 
 
 def test_missing_inputs_are_skipped_not_fatal(tmp_path, capsys):
     assert figures.make_figures(tmp_path, milestone="M3") == []
-    assert "records.parquet not found" in capsys.readouterr().err
+    assert "records not found" in capsys.readouterr().err
 
 
 def test_unknown_format_raises(tmp_path):

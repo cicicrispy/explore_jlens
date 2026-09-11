@@ -1,0 +1,26 @@
+# M3 (Phase B, GPU), position set "question" -- ANOMALY run: anomaly + content (the content probe is a
+# control for anomaly, so they run together). Launch only after reading the summary of the positives
+# run of this position set (hygiene invariant 7). Hand-written; copied into the run folder's settings/.
+#
+#   python scripts/m3_grid.py --experiment configs/experiments/m3_anomaly_question.yaml
+#
+# Uses the control tokens the positives run picked; refuses unless that run is finished and used the
+# same M2 run, band, position set and skip_first.
+
+name: anomaly_question     # run folders: runs/M3/anomaly_question_<UTC start time>/
+milestone: M3
+
+questions: [anomaly, content]
+position_set: question
+band: workspace
+
+# REQUIRED: folder names of finished runs.
+from_m2_run: null          # the same M2 run as the positives run
+positives_run: null        # runs/M3/<this>/, e.g. positives_question_20260912-031000
+m1_validate_run: null
+
+directions: [m2i, i2m]
+alpha: 1.0
+seed: 0
+skip_first: 0
+save_topk: 100

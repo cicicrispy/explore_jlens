@@ -38,6 +38,9 @@ def answer_ids(tokenizer, answers: list[str]) -> list[int]:
 def build_tokens_cfg(tokenizer, raw: dict) -> dict:
     """Convert the raw configs/tokens.yaml dict (strings) into id-lists for question_margin /
     argmax_label. `raw` must have "answers" (yes/no/hello) and "language_tokens" (es/fr forms)."""
+    if "yes" not in raw["answers"] or "no" not in raw["answers"]:
+        raise KeyError('configs/tokens.yaml answers needs the keys "yes" and "no" -- quoted: YAML reads a bare '
+                       f"yes / no as true / false (found keys: {list(raw['answers'])})")
     yes_ids = answer_ids(tokenizer, raw["answers"]["yes"])
     no_ids = answer_ids(tokenizer, raw["answers"]["no"])
 

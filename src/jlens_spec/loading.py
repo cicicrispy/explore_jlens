@@ -1,12 +1,78 @@
 """Clean-pass workspace loading: cos(h, v_tok) and rank, per position/layer/token."""
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 import torch
 import torch.nn.functional as F
 
 from . import lens as lens_mod
 from . import model as model_mod
+
+
+def prompt_pass(model, lens, prompt, lang_token_ids: list[int], save_k: int):
+    """M2's clean pass for ONE prompt: one forward pass, every lens layer read from the same trace.
+
+    Returns (loadings, topk, answer_logits):
+      loadings: DataFrame, one row per (position, lens layer, language token) -- columns
+          stimulus_id, question_key, pos, class, layer, token, token_id, cos, rank. cos = cos(h, v_tok)
+          in float32; rank = 1-based rank of the token in the full lens readout at that position.
+      topk: pyarrow Table, one row per (position, lens layer) -- columns stimulus_id, question_key,
+          pos, class, layer, topk_ids (int32 x save_k), topk_logits (float32 x save_k): the lens
+          readout's top-`save_k` tokens, best first.
+      answer_logits: Tensor[vocab], the model's own logits at metric_pos (where the answer is read).
+    Every position is included (template tokens too); every lens layer (none is skipped)."""
+    import pyarrow as pa
+
+    layers = list(lens.layers)
+    # A plain loop, not a comprehension: inside an nnsight trace a comprehension's results never get
+    # assigned.
+    saved = {}
+    with model.trace(prompt.input_ids):
+        for l in layers:
+            saved[l] = model_mod.layer_output(model, l).float()[0].save()
+        answer = model.output.logits[0, prompt.metric_pos].float().save()
+
+    tok = model.tokenizer
+    n = len(prompt.input_ids)
+    texts = [tok.decode([t]) for t in lang_token_ids]
+    classes = np.array(prompt.classes, dtype=object)
+    load_parts, top_ids, top_logits = [], [], []
+    for l in layers:
+        h = saved[l]                                                    # [pos, d]
+        logits = lens_mod._transport_unembed(model, lens, h, l).float()  # [pos, vocab]
+        V = lens_mod.lens_vectors(model, lens, lang_token_ids, l).to(h.device)  # [T, d]
+        cos = (F.normalize(h, dim=-1) @ F.normalize(V, dim=-1).T).cpu().numpy()  # [pos, T]
+        idx = torch.tensor(lang_token_ids, device=logits.device)
+        vals = logits[:, idx]                                           # [pos, T]
+        rank = torch.stack([1 + (logits > vals[:, j:j + 1]).sum(-1) for j in range(len(lang_token_ids))],
+                           dim=-1).cpu().numpy()                         # [pos, T]
+        T = len(lang_token_ids)
+        load_parts.append(pd.DataFrame({
+            "pos": np.repeat(np.arange(n), T), "class": np.repeat(classes, T), "layer": int(l),
+            "token": np.tile(texts, n), "token_id": np.tile(lang_token_ids, n),
+            "cos": cos.reshape(-1).astype(np.float32), "rank": rank.reshape(-1).astype(np.int64)}))
+        tv, ti = torch.topk(logits, save_k, dim=-1)
+        top_ids.append(ti.to(torch.int32).cpu().numpy())
+        top_logits.append(tv.cpu().numpy().astype(np.float32))
+
+    loadings = pd.concat(load_parts, ignore_index=True)
+    loadings.insert(0, "question_key", prompt.question_key)
+    loadings.insert(0, "stimulus_id", prompt.stimulus_id)
+
+    ids = np.concatenate(top_ids)          # [layers * pos, k], layer-major
+    vals = np.concatenate(top_logits)
+    n_rows = ids.shape[0]
+    topk = pa.table({
+        "stimulus_id": pa.array([prompt.stimulus_id] * n_rows),
+        "question_key": pa.array([prompt.question_key] * n_rows),
+        "pos": pa.array(np.tile(np.arange(n), len(layers)).astype(np.int32)),
+        "class": pa.array(list(classes) * len(layers)),
+        "layer": pa.array(np.repeat(np.array(layers, dtype=np.int32), n)),
+        "topk_ids": pa.FixedSizeListArray.from_arrays(pa.array(ids.reshape(-1)), save_k),
+        "topk_logits": pa.FixedSizeListArray.from_arrays(pa.array(vals.reshape(-1)), save_k),
+    })
+    return loadings, topk, answer
 
 
 def loading(model, lens, prompt, token_ids: list[int], layers: list[int]) -> pd.DataFrame:
@@ -54,57 +120,6 @@ def single_token_pairs(tokenizer, pairs: dict) -> tuple[dict, list[str]]:
         else:
             dropped.append(name)
     return kept, dropped
-
-
-def _question_hidden(model, prompt, layers: list[int]) -> tuple[list[int], dict]:
-    q_pos = [i for i, c in enumerate(prompt.classes) if c == "question"]
-    saved = {}
-    with model.trace(prompt.input_ids):
-        for l in layers:
-            saved[l] = model_mod.layer_output(model, l).float()[0, q_pos].save()
-    return q_pos, saved
-
-
-def question_topk_ids(model, lens, prompt, layers: list[int], k: int = 25) -> set[int]:
-    """Union of the lens readout's top-k token ids over every question-class position and every
-    layer in `layers` -- the candidate pool for control-token selection (M2 step 1)."""
-    _, saved = _question_hidden(model, prompt, layers)
-    ids: set[int] = set()
-    for l in layers:
-        top_ids, _ = lens_mod.readout(model, lens, saved[l], l, k=k)
-        ids.update(top_ids.flatten().tolist())
-    return ids
-
-
-def question_token_stats(model, lens, prompt, token_ids: list[int], layers: list[int]) -> pd.DataFrame:
-    """Per token in `token_ids`: cos(h, v_tok) and full-readout rank, averaged over every
-    question-class position x layer of this prompt (aggregated here, since per-position rows for
-    thousands of candidates would be tens of millions of rows). Columns: stimulus_id, question_key,
-    token_id, token, mean_cos, mean_rank."""
-    _, saved = _question_hidden(model, prompt, layers)
-    tokenizer = model.tokenizer
-    cos_sum = rank_sum = None
-    n = 0
-    for l in layers:
-        h = saved[l]  # [Q, d]
-        V = lens_mod.lens_vectors(model, lens, token_ids, l)  # [T, d]
-        cos = F.normalize(h, dim=-1) @ F.normalize(V, dim=-1).T  # [Q, T], no [Q, T, d] intermediate
-        logits = lens_mod._transport_unembed(model, lens, h, l).float()  # [Q, vocab]
-        vals = logits[:, torch.tensor(token_ids, device=logits.device)].contiguous()  # [Q, T]
-        sorted_asc, _ = torch.sort(logits, dim=-1)
-        # 1 + #(logits > val) == vocab - #(logits <= val) + 1
-        rank = (logits.shape[-1] - torch.searchsorted(sorted_asc, vals, right=True) + 1).float()
-        cos_sum = cos.sum(0) if cos_sum is None else cos_sum + cos.sum(0)
-        rank_sum = rank.sum(0) if rank_sum is None else rank_sum + rank.sum(0)
-        n += h.shape[0]
-    return pd.DataFrame({
-        "stimulus_id": prompt.stimulus_id,
-        "question_key": prompt.question_key,
-        "token_id": token_ids,
-        "token": [tokenizer.decode([t]) for t in token_ids],
-        "mean_cos": (cos_sum / n).tolist(),
-        "mean_rank": (rank_sum / n).tolist(),
-    })
 
 
 def _matrix_lang_of(stimulus_id: str) -> str | None:

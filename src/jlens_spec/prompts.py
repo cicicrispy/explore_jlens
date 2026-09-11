@@ -5,7 +5,14 @@ CALL CONVENTION NOTE (flagged assumption, not literally specified): `build_promp
 required to build anything, this implementation expects the caller to fold them into `fmt`:
     fmt = {**yaml_loaded_prompt_format, "tokenizer": tokenizer, "questions": stimuli_json["questions"]}
 This is the only way to satisfy the 3-argument signature; flagged here for the human to confirm or
-correct rather than silently inventing a 4th parameter.
+correct rather than silently inventing a 4th parameter. `fmt["user_message"]` (from
+configs/prompt_format.yaml) is the user turn's text with {question} and {passage} placeholders --
+the paper's wrapper -- see `make_fmt`.
+
+Position classes: "question" (the question sentence), "matrix"/"intrusion" (the passage's
+sentences), "instruction" (every other character of the user message: the paper's two instruction
+sentences and the blank lines between the parts), and "template" (the chat template around the user
+message: <|im_start|>user, <|im_end|>, the assistant/think prefix -- never edited).
 """
 from __future__ import annotations
 
@@ -15,7 +22,14 @@ from typing import Literal
 
 import torch
 
-PositionClass = Literal["template", "question", "matrix", "intrusion"]
+PositionClass = Literal["template", "instruction", "question", "matrix", "intrusion"]
+
+# The classes a Stage-1 edit may target (template tokens never are). M3's two position sets:
+#   question: the question sentence only;  message: every token of the user message.
+POSITION_SETS = {
+    "question": ("question",),
+    "message": ("instruction", "question", "matrix", "intrusion"),
+}
 
 REQUIRED_SUFFIX = "<|im_start|>assistant\n<think>\n\n</think>\n\n"
 MANUAL_THINK_PREFILL = "<think>\n\n</think>\n\n"
@@ -38,12 +52,34 @@ def _overlap(a0: int, a1: int, b0: int, b1: int) -> int:
     return max(0, min(a1, b1) - max(a0, b0))
 
 
+def make_fmt(tokenizer, stimuli: dict, prompt_format: dict) -> dict:
+    """The `fmt` argument of build_prompt: configs/prompt_format.yaml's contents plus the tokenizer
+    and stimuli.json's question strings."""
+    return {**prompt_format, "tokenizer": tokenizer, "questions": stimuli["questions"]}
+
+
+def fill_user_message(user_message: str, question: str, passage: str) -> tuple[str, int, int]:
+    """Substitute the question and passage into `user_message` (which must contain "{question}"
+    exactly once, followed later by "{passage}" exactly once). Returns (text, question_start,
+    passage_start), the starts being character offsets within `text`. Plain string splitting, not
+    str.format, so braces in a passage can never be misread as placeholders."""
+    if user_message.count("{question}") != 1 or user_message.count("{passage}") != 1:
+        raise ValueError(f"user_message must contain {{question}} and {{passage}} exactly once: {user_message!r}")
+    before, rest = user_message.split("{question}")
+    if "{passage}" not in rest:
+        raise ValueError("user_message must put {question} before {passage}")
+    middle, after = rest.split("{passage}")
+    text = before + question + middle + passage + after
+    return text, len(before), len(before) + len(question) + len(middle)
+
+
 def build_prompt(stimulus: dict, question_key: str, fmt: dict) -> Prompt:
     tokenizer = fmt["tokenizer"]
     question_text = fmt["questions"][question_key]
     passage_text = stimulus["text"]
+    content, q_rel, p_rel = fill_user_message(fmt["user_message"], question_text, passage_text)
 
-    messages = [{"role": "user", "content": f"{question_text}\n\n{passage_text}"}]
+    messages = [{"role": "user", "content": content}]
 
     flags: list[str] = []
     # HF passes unknown kwargs into the Jinja context silently, so a template that doesn't know
@@ -69,12 +105,16 @@ def build_prompt(stimulus: dict, question_key: str, fmt: dict) -> Prompt:
         "tokens preceding metric_pos do not match the tokenized required suffix exactly"
     )
 
-    q_start = templated.find(question_text)
-    assert q_start != -1, "question text not found verbatim in templated prompt"
+    c_start = templated.find(content)
+    assert c_start != -1, "the user message was not found verbatim in the templated prompt"
+    c_end = c_start + len(content)
+    q_start = c_start + q_rel
     q_end = q_start + len(question_text)
-
-    p_start = templated.find(passage_text, q_end)
-    assert p_start != -1, "passage text not found verbatim in templated prompt after the question"
+    p_start = c_start + p_rel
+    p_end = p_start + len(passage_text)
+    assert templated[q_start:q_end] == question_text and templated[p_start:p_end] == passage_text
+    # Everything in the user message that is neither the question nor the passage.
+    instruction_spans = [(a, b) for a, b in ((c_start, q_start), (q_end, p_start), (p_end, c_end)) if b > a]
 
     sentence_spans = [
         {
@@ -95,7 +135,9 @@ def build_prompt(stimulus: dict, question_key: str, fmt: dict) -> Prompt:
         q_ov = _overlap(s, e, q_start, q_end)
         m_ov = sum(_overlap(s, e, ms, me) for ms, me in matrix_spans)
         i_ov = sum(_overlap(s, e, ms, me) for ms, me in intrusion_spans)
-        overlaps = {"question": q_ov, "matrix": m_ov, "intrusion": i_ov}
+        n_ov = sum(_overlap(s, e, a, b) for a, b in instruction_spans)
+        # Ties go to the first entry (question/matrix/intrusion before instruction).
+        overlaps = {"question": q_ov, "matrix": m_ov, "intrusion": i_ov, "instruction": n_ov}
         best_class, best_ov = max(overlaps.items(), key=lambda kv: kv[1])
         if best_ov == 0:
             classes.append("template")
@@ -112,8 +154,9 @@ def build_prompt(stimulus: dict, question_key: str, fmt: dict) -> Prompt:
 
     spans = {
         "question": [q_start, q_end],
-        "passage": [p_start, p_start + len(passage_text)],
+        "passage": [p_start, p_end],
         "sentences": sentence_spans,
+        "instruction": [[a, b] for a, b in instruction_spans],
     }
 
     return Prompt(
@@ -130,13 +173,15 @@ def build_prompt(stimulus: dict, question_key: str, fmt: dict) -> Prompt:
 
 
 def region_check(prompt: Prompt) -> list[dict]:
-    """For each region -- the question, then every sentence -- whether the tokens labelled with that
-    region's class (and overlapping it) spell EXACTLY the region's text: nothing stripped, no extra
-    characters. A token that also carries characters from outside its region (a separator newline,
-    the space before a sentence, template text) is edited along with the region, so every such
-    token must be known. One row per region; `match` is False where they differ."""
+    """For each region -- the question, every sentence, and every piece of instruction text --
+    whether the tokens labelled with that region's class (and overlapping it) spell EXACTLY the
+    region's text: nothing stripped, no extra characters. A token that also carries characters from
+    outside its region (a separator newline, the space before a sentence, template text) is edited
+    along with the region, so every such token must be known. One row per region; `match` is False
+    where they differ."""
     regions = [("question", *prompt.spans["question"])] + [
-        (s["role"], s["char_start"], s["char_end"]) for s in prompt.spans["sentences"]]
+        (s["role"], s["char_start"], s["char_end"]) for s in prompt.spans["sentences"]] + [
+        ("instruction", a, b) for a, b in prompt.spans.get("instruction", [])]
     rows = []
     for cls, a, b in regions:
         toks = [(s, e) for i, (s, e) in enumerate(prompt.offsets)
@@ -156,7 +201,9 @@ def region_check(prompt: Prompt) -> list[dict]:
 
 def mask(prompt: Prompt, classes: set[PositionClass], skip_first: int = 4) -> torch.Tensor:
     """Boolean mask over positions: True where prompt.classes[i] in `classes`, positions < skip_first
-    forced False (skips the first ~4 high-norm positions per the hygiene invariant)."""
+    forced False (the spec's hygiene invariant 3 skips the first ~4 high-norm positions; M0 used 4.
+    From M2 on, skip_first is 0 -- the paper swaps across all question tokens, and the high-norm
+    first positions are chat-template tokens, which no position set includes anyway)."""
     m = torch.tensor([c in classes for c in prompt.classes], dtype=torch.bool)
     if skip_first > 0:
         m[: min(skip_first, len(m))] = False
