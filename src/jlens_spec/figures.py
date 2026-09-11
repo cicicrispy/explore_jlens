@@ -29,11 +29,14 @@ used), written by the milestone script so figures never read configs/.
 from __future__ import annotations
 
 import json
+import os
 import sys
+import urllib.request
 from pathlib import Path
 
 import pandas as pd
 
+from . import io as io_mod
 from . import loading as loading_mod
 
 __all__ = [
@@ -66,9 +69,65 @@ CLASS_COLORS = {
 _M3_COLUMNS = ["stimulus_id", "question_key", "direction", "kind", "flip", "margin", "intervention_logs"]
 
 
+# Chinese (CJK) characters: matplotlib's default font (DejaVu Sans) has none and would draw empty
+# boxes. Figures therefore fall back, character by character, to Noto Sans SC (SIL Open Font
+# License), downloaded once from Google Fonts' GitHub repo -- pinned to one commit and checked
+# against its sha256 -- and cached in $HF_HOME/fonts/. If Google moves the file, update CJK_FONT_URL
+# and CJK_FONT_SHA256 (README: "Chinese characters in figures"). If it can't be fetched, this
+# machine's own Chinese font is used if it has one, with a warning; no figure is ever skipped over it.
+CJK_FONT_URL = ("https://raw.githubusercontent.com/google/fonts/8e44913e4ff26fc997e6856c1ec40ff4791c98c5/"
+                "ofl/notosanssc/NotoSansSC%5Bwght%5D.ttf")
+CJK_FONT_SHA256 = "a3041811a78c361b1de50f953c805e0244951c21c5bd412f7232ef0d899af0da"
+_SYSTEM_CJK_FONTS = ["Hiragino Sans GB", "Heiti SC", "Noto Sans CJK SC", "Arial Unicode MS"]
+_fonts_ready = False
+
+
+def cjk_font_file() -> Path:
+    """The cached Noto Sans SC file, downloading (and sha256-checking) it the first time."""
+    cache = Path(os.environ.get("HF_HOME") or Path.home() / ".cache" / "huggingface") / "fonts"
+    path = cache / "NotoSansSC.ttf"
+    if path.exists() and io_mod.sha256_of(path) == CJK_FONT_SHA256:
+        return path
+    cache.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".download")
+    urllib.request.urlretrieve(CJK_FONT_URL, tmp)
+    got = io_mod.sha256_of(tmp)
+    if got != CJK_FONT_SHA256:
+        tmp.unlink(missing_ok=True)
+        raise ValueError(f"the downloaded font's sha256 is {got}, expected {CJK_FONT_SHA256} -- not using it")
+    os.replace(tmp, path)
+    return path
+
+
+def _setup_fonts() -> None:
+    """Once per process: DejaVu Sans first, then a Chinese font for the characters it lacks."""
+    global _fonts_ready
+    if _fonts_ready:
+        return
+    _fonts_ready = True
+    import matplotlib
+    from matplotlib import font_manager as fm
+
+    families = ["DejaVu Sans"]
+    try:
+        path = cjk_font_file()
+        fm.fontManager.addfont(str(path))
+        families.append(fm.FontProperties(fname=str(path)).get_name())
+    except Exception as e:  # noqa: BLE001 -- reported; figures are still drawn
+        have = {f.name for f in fm.fontManager.ttflist}
+        system = [n for n in _SYSTEM_CJK_FONTS if n in have]
+        families += system
+        print(f"[figures] WARNING: could not get the Chinese font Noto Sans SC ({e!r}); "
+              + (f"using this machine's {system[0]} instead." if system
+                 else "Chinese characters in figures will show as empty boxes."), file=sys.stderr)
+    # font.family (not font.sans-serif) is what matplotlib's per-character fallback walks through.
+    matplotlib.rcParams["font.family"] = families
+
+
 def _plt():
     import matplotlib.pyplot as plt
 
+    _setup_fonts()
     return plt
 
 

@@ -211,8 +211,12 @@ def check4_positions(model, lens, prompts) -> pd.DataFrame:
                             "rank_of_actual", "kurtosis")}
     for p in prompts:
         pos = [i for i, c in enumerate(p.classes) if c != "template"]
+        # A plain loop, not a dict comprehension: inside an nnsight trace a comprehension's results
+        # never get assigned (UnboundLocalError after the trace).
+        saved = {}
         with model.trace(p.input_ids):
-            saved = {l: model_mod.layer_output(model, l).float()[0, pos].save() for l in lens.layers}
+            for l in lens.layers:
+                saved[l] = model_mod.layer_output(model, l).float()[0, pos].save()
             actual = model.output.logits[0, pos].float().save()
         actual_top1 = torch.argmax(actual, dim=-1)
         for l in lens.layers:

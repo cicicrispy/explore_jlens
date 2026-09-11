@@ -51,7 +51,7 @@ def test_m1_from_parquet(tmp_path):
 
     written = figures.make_figures(tmp_path, formats=("pdf",), milestone="M1")
     assert _files(written) == ["band_signatures.pdf", "check3_swap_alpha1.pdf", "cka_heatmap.pdf",
-                               "readout_top1_sp01.pdf"]
+                               "readout_top1_sp_01.pdf"]
     assert tmp_path / "figures" / "pdf" / "masks" / "check3_swap_alpha1.pdf" in written
 
 
@@ -123,3 +123,17 @@ def test_milestone_comes_from_the_run_manifest(tmp_path):
 def test_folder_without_manifest_is_rejected(tmp_path):
     with pytest.raises(FileNotFoundError, match="no manifest.json"):
         figures.make_figures(tmp_path)
+
+
+def test_chinese_characters_are_drawn_not_boxes(tmp_path):
+    """The positive-control prompt must render: no 'Glyph ... missing' warning in PNG, PDF or SVG."""
+    import warnings
+
+    plt = figures._plt()
+    for fmt in ("png", "pdf", "svg"):
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            fig, ax = plt.subplots()
+            ax.text(0.1, 0.5, '·Spanish "小"的反义词是" 大 长')
+            figures.write(fig, tmp_path / f"cjk.{fmt}")
+        assert not [x for x in w if "missing from font" in str(x.message)], fmt

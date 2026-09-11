@@ -131,7 +131,7 @@ copy `revision_sha` into `configs/lens.yaml`, and put the run's folder name into
 tokens (check 4: the rank of the model's real next token) so the k each check is judged at is applied
 afterwards from the saved files (`src/jlens_spec/m1_checks.py`):
 - final-layer agreement (lens readout vs the model's actual logits);
-- readout reproduction on `sp_01` (figure `readout_top1_sp01`);
+- readout reproduction on `sp_01` (figure `readout_top1_sp_01`);
 - **the Chinese-antonym causal positive control, exactly as in the paper**: the raw prompt
   `"小"的反义词是"` (no chat template), ` big`->` long` and ` bigger`->` longer` swapped at **every** token
   position across layers 25-75% of depth; 长 should become the top-1 answer instead of 大. Alpha 2 runs
@@ -186,6 +186,21 @@ folder instead. Formats are png/pdf/svg. Which files each milestone's figures re
 top of `src/jlens_spec/figures.py`. Plotting functions there take DataFrames as read back from
 parquet and return a matplotlib Figure, so you can also call them directly in a notebook to restyle
 one figure.
+
+## Chinese characters in figures
+
+matplotlib's default font (DejaVu Sans) has no Chinese characters and would draw empty boxes (e.g.
+in M1's positive-control mask figures, `"小"的反义词是"`). So figures fall back, character by
+character, to **Noto Sans SC** (free, SIL Open Font License), which is **downloaded from Google
+Fonts' GitHub repo** (`google/fonts`, file `ofl/notosanssc/NotoSansSC[wght].ttf`) the first time a
+figure is drawn on a machine, and cached in `$HF_HOME/fonts/`. Nothing is installed and nothing is
+stored in git or on HF. The download is pinned to one commit of that repo and checked against the
+file's sha256, so it is always the same file.
+
+**If Google moves or renames the file:** update `CJK_FONT_URL` (and `CJK_FONT_SHA256`, the file's
+new sha256) at the top of `src/jlens_spec/figures.py`. If the font can't be downloaded (e.g. no
+internet), figures use the machine's own Chinese font if it has one (Macs do) and print a warning;
+otherwise Chinese characters show as boxes -- the data files are never affected, only the figures.
 
 ## Layer bands: contiguous ranges vs. multiple blocks
 
