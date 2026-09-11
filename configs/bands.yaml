@@ -10,6 +10,11 @@
 #
 # Every [a, b] is INCLUSIVE on both ends: [18, 30] = layers 18..30. A band may be one pair or a
 # list of pairs (blocks).
-workspace: null    # [onset, motor_onset - 1] -- the workspace; excludes motor layers by definition
-full: null         # [onset, last lens-covered layer] -- workspace + motor layers (never the final layer); Stage 2
-early_late: null   # [[a, b], [c, d]] -- the early and the late part of the workspace, two blocks; Stage 2
+# Filled 2026-09-11 by the human from runs/M1/validate_20260911-205658: onset 18 (next-token
+# agreement first leaves zero at 16-17, kurtosis turns up from its low at 18-19, CKA block boundary
+# at 18); motor onset 56 (top-1 agreement jumps 0.04 -> 0.27 at 56, kurtosis climbs to its peak at
+# 58-59). early_late: two blocks with a gap -- the early block, then skip the 33-45 CKA block, then
+# the late layers before the motor onset.
+workspace: [18, 55]              # [onset, motor_onset - 1] -- the workspace; excludes motor layers by definition
+full: [18, 62]                   # [onset, last lens-covered layer] -- workspace + motor layers (never the final layer); Stage 2
+early_late: [[18, 33], [45, 55]] # [[a, b], [c, d]] -- the early and the late part of the workspace, two blocks; Stage 2

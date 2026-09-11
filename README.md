@@ -18,7 +18,9 @@ As of 2026-09-11 (you run everything yourself and report back; the assistant wri
   validation `runs/M1/validate_20260911-203842` (clamped): the answer moves towards 长 with alpha
   but does not flip (大/长 logits: clean 19.0/12.9, alpha 1 18.6/15.6, alpha 2 17.4/17.25). You
   decided to continue: M1 now always runs check 4, check 3 also saves the lens readout on the
-  prompt, and M2/M3 need your acceptance in `configs/m1_acceptance.yaml`. Third validation next.
+  prompt, and M2/M3 need your acceptance in `configs/m1_acceptance.yaml`. Third validation
+  `runs/M1/validate_20260911-205658` ran to the end and is **accepted**; bands filled from it
+  (workspace [18, 55], full [18, 62], early_late [[18, 33], [45, 55]]). **M2 next.**
 - **M2, M3: code written (stage 3), not executed.** Run folders, one file per prompt, uploads as each
   prompt finishes, resume, controls picked by rule in a separate step you review, two position sets,
   a Mac dry run.

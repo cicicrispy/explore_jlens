@@ -4,9 +4,9 @@
 # `validate_run` names exactly that run and `reason` is filled; the reason is quoted in their
 # summaries, and this file is copied into every real M2/M3 run's settings/. (Decided 2026-09-11.)
 
-validate_run: null   # the M1 run's folder name, e.g. validate_20260911-210000 (runs/M1/<this>)
+validate_run: validate_20260911-205658   # the M1 run's folder name (runs/M1/<this>)
 reason: >-
-  The clamped swap moves the answer towards 长 with alpha but does not flip it (validate_20260911-203842:
-  大/长 logits clean 19.0/12.9, alpha 1 18.6/15.6, alpha 2 17.4/17.25). The paper's results are on
-  Claude models; on Qwen3.6-27B the effect is smaller, but there is an effect, so the manipulation
-  works. M3 effects may be smaller than the paper's for the same reason.
+  We do see a minor change, but it is not as big as what is reported for Claude. At alpha 2 the
+  swap nearly flips the answer (长 within 0.1 logit of 大: 17.25 vs 17.4); at alpha 1, the paper's
+  swap, the change is smaller and 大 stays clearly on top (18.6 vs 15.6; clean 19.0 vs 12.9). The
+  paper's results are on Claude models; an effect on Qwen3.6-27B means the manipulation works.

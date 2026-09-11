@@ -5,13 +5,15 @@
 #   python scripts/m2_loading.py --fresh    # always a new run
 #
 # Refuses to start until configs/bands.yaml is complete and consistent (all three bands, nested) and
-# the M1 validation run below is finished with its causal positive control passed.
+# the M1 validation run below is finished with its causal positive control passed -- or not passed
+# but accepted by the human in configs/m1_acceptance.yaml (which must name that same run).
 
 name: loading        # run folders: runs/M2/loading_<UTC start time>/
 milestone: M2
 
 # REQUIRED: the folder name of your finished M1 validation run, e.g. validate_20260912-031000
-# (runs/M1/<this>/). Its check3_positive_control.yaml must say passed: true.
-m1_validate_run: null
+# (runs/M1/<this>/). Its check3_positive_control.yaml must say passed: true, or
+# configs/m1_acceptance.yaml must name it.
+m1_validate_run: validate_20260911-205658
 
 save_topk: 100       # top tokens saved per position x layer (and for the answer); M3's control pool

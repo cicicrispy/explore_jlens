@@ -593,6 +593,20 @@ All dates 2026-09-11 unless noted.
   of big / long the lens reads). Decided by the human: continue — "as long as there is an effect,
   the manipulation is working". M1 now always runs check 4; the acceptance is written in
   `configs/m1_acceptance.yaml` after reading the next M1 run, and M2/M3 check it and quote it.
+- Third M1 validation (`validate_20260911-205658`, ran to the end; check 3 identical to the second).
+  The lens readout on the control prompt: at the last position, the English "big" forms reach the
+  top only at layers 56–60 (' large', ' big', 'large', 'big'), after the swap's layers 16–47; inside
+  them, ' big' is strongest at position 2 (the quote after 小; rank 2 at layer 18). ' large' is as
+  prominent as ' big' late and is not swapped. The swap does what it targets: at α = 1 ' big' and
+  ' bigger' fall about tenfold in rank within the band and ' long' rises; at α = 2 ' long' is the
+  lens's top token at layers 44, 56 and 60 — the output still says 大, with 长 second. 'bigger' and
+  'longer' without a space are not single tokens. The motor-onset heuristic returned 62 (the last
+  layer): its threshold is crossed only there, so it gives no guidance on this model.
+- The human accepted `validate_20260911-205658` (`configs/m1_acceptance.yaml`) and chose the bands
+  from its figures: onset 18 (next-token agreement first leaves zero at 16–17, kurtosis turns up
+  from its low at 18–19, a CKA block boundary at 18), motor onset 56 (top-1 agreement jumps from
+  0.04 to 0.27, kurtosis climbs to its peak at 58–59). workspace [18, 55], full [18, 62],
+  early_late [[18, 33], [45, 55]] (two blocks with a gap, skipping the 34–44 block).
 - Figures: M3 summary and combined figures uploaded to the dataset, mask figures and M2 figures not;
   added the flip heatmap, the margin change and the M2 rank heatmaps; panel c kept exactly as
   specified.
