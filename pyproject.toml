@@ -8,9 +8,12 @@ version = "0.1.0"
 description = "J-lens selectivity replication (Stage 0/1)"
 requires-python = ">=3.11"
 dependencies = [
-  "nnsight>=0.8.0rc1",  # spec says >=0.8; only 0.8.0rc1 exists on PyPI, and pip skips pre-releases unless named
-  "transformers",
-  "accelerate",  # required by transformers whenever device_map is passed (spec's load_model uses device_map)
+  # The three packages that load and drive the model are pinned to the versions the test suite and the
+  # Mac dry run used (2026-09-11), so the GPU box runs the same library code. torch is not pinned here:
+  # setup.sh installs the build for each platform (spec).
+  "nnsight==0.8.0rc1",  # spec says >=0.8; named exactly, because pip skips pre-releases unless named
+  "transformers==5.17.0",
+  "accelerate==1.15.0",  # required by transformers whenever device_map is passed (spec's load_model uses device_map)
   "huggingface_hub",
   "pyyaml",
   "python-dotenv",

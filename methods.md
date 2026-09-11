@@ -448,9 +448,11 @@ that. No hypothesis tests are run at this stage.
   magnitudes involved).
 - **Figures in the dataset.** The data behind every figure is uploaded. Of the figures themselves,
   only M3's summary figures and the combined figures are uploaded; the rest are drawn locally.
-- **Software.** Python ≥ 3.11, PyTorch, Hugging Face `transformers`, `nnsight` ≥ 0.8.0rc1 for reading
-  and writing activations; pandas/pyarrow (Parquet) for data; matplotlib for figures (with a pinned,
-  checksummed Noto Sans SC font for Chinese characters).
+- **Software.** Python ≥ 3.11, PyTorch, Hugging Face `transformers` 5.17.0 and `accelerate` 1.15.0,
+  `nnsight` 0.8.0rc1 for reading and writing activations — these three pinned to the versions the
+  tests and the dry run used, so the GPU runs the same library code (PyTorch is installed per
+  platform); pandas/pyarrow (Parquet) for data; matplotlib for figures (with a pinned, checksummed
+  Noto Sans SC font for Chinese characters).
 - **Tests.** A test suite (CPU, stand-in model, random lens) covers the swap mathematics (e.g. zero
   effect when v_s = v_t, the orthogonal complement unchanged, linear scaling in α, swap ≠ steering),
   the scaling of the controls, prompt construction and position classes, the measures, control
@@ -529,6 +531,10 @@ All dates 2026-09-11 unless noted.
   digit (punctuation, blank lines, symbols) and the passages' own words are now excluded
   automatically. The code version that picked the controls is not compared with the M3
   run's, so controls can be picked again after M2.
+- Before the first GPU run: `nnsight`, `transformers` and `accelerate` pinned to the versions the
+  tests and dry run used (the dependency list had allowed newer ones, and no lock file was
+  committed). nnsight's "LanguageModel is deprecated" notice is left for after M3: switching the
+  loader would change a path the real model has not run through yet.
 - Figures: M3 summary and combined figures uploaded to the dataset, mask figures and M2 figures not;
   added the flip heatmap, the margin change and the M2 rank heatmaps; panel c kept exactly as
   specified.
