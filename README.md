@@ -5,11 +5,16 @@ this README covers how to run each milestone.
 
 ## Status
 
-Code has been written for M0 (Phase A, Mac) and M1-M3 (Phase B, GPU box), but **nothing has been
-executed yet**. Commands below are what to run; none of them have been run by the assistant that
-wrote this code -- run them yourself and report back what happens (errors, test failures, etc.) so
-we can iterate. See "Known open items" below for things flagged during writing that need your input
-before M1 can run for real.
+As of 2026-09-11 (you run everything yourself and report back; the assistant writes the code):
+
+- **M0: done and signed off.** Clean run `runs/M0/smoke_20260911-043447`; `pytest tests/` all green
+  (91 passed, 1 skipped -- the reference-implementation test).
+- **M1: code written.** The local step has run: `runs/M1/tokens_20260911-055127` (real tokenizer: every
+  prompt region spelled exactly by its tokens, template identical to M0's, all token pairs single
+  tokens). The GPU steps (`download.py`, `m1_validate.py`) have **not** run yet.
+- **M2, M3: not yet converted** to run folders / checkpoints (next stage of work); not executed.
+
+See "Known open items" below for things that still need your input.
 
 ## Setup
 

@@ -126,8 +126,8 @@ def main() -> None:
         f"- {len(lead_space)} are a sentence's first token carrying the space before it (tokens = ' ' + sentence).",
         f"- {len(other)} are something else" + (":" if len(other) else "."),
         *listing(other),
-        "- On the stand-in tokenizer the same check found 64 of the first kind and 256 of the second. "
-        "What to do about them is decided with the human (README 'Known open items').",
+        "- Expected: 0. Known tokenizer boundaries are documented in README 'Known open items' and "
+        "stimuli/notes.md.",
         f"- Prompts carrying build flags: {flags or 'none'}", "",
         "## 3. Template string (real tokenizer) vs M0",
         f"- Compared with {m0_source}: " + ("identical." if not diff else "DIFFERENT -- see template_diff.txt:"),
