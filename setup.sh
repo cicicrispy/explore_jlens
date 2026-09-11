@@ -94,9 +94,15 @@ if [ "$PLATFORM" = "cuda" ]; then
   python3 scripts/download.py
 fi
 
-# 8. tests. Fetch the stand-in first, with a visible progress bar -- pytest captures output, so a
-# first-time ~1.2 GB download inside a test fixture otherwise looks like a hang.
-python3 - <<'EOF'
+# 8. tests -- not on the GPU box (human's decision, 2026-09-11; a departure from the spec): the
+# suite runs the stand-in model with a random lens, which the Mac covers, and the GPU itself is
+# checked by M1's validation. Elsewhere, fetch the stand-in first, with a visible progress bar --
+# pytest captures output, so a first-time ~1.2 GB download inside a test fixture otherwise looks
+# like a hang.
+if [ "$PLATFORM" = "cuda" ]; then
+  echo "cuda: tests skipped (they run on the Mac; M1 validation checks the GPU)."
+else
+  python3 - <<'EOF'
 import yaml
 from jlens_spec import env
 env.bootstrap()
@@ -105,9 +111,7 @@ cfg = yaml.safe_load(open("configs/model.yaml"))
 print(f"Fetching stand-in {cfg['standin_hf_id']} into HF_HOME (skips files already cached)...")
 snapshot_download(cfg["standin_hf_id"])
 EOF
-pytest tests/ -q
-if [ "$PLATFORM" = "cuda" ]; then
-  pytest tests/ -q -m gpu
+  pytest tests/ -q
 fi
 
 # 9. lock file

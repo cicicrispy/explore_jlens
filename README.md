@@ -9,9 +9,10 @@ covers how to run each milestone, and every place the code deliberately departs 
 As of 2026-09-11 (you run everything yourself and report back; the assistant writes the code):
 
 - **M0: done and signed off.** Clean run `runs/M0/smoke_20260911-043447`.
-- **M1: code written.** The local step has run: `runs/M1/tokens_20260911-055127` -- but that was with
-  the OLD prompt (no wrapper); **re-run `scripts/m1_tokens.py`** now that the prompt matches the paper
-  (see "Prompt format"). The GPU steps (`download.py`, `m1_validate.py`) have **not** run yet.
+- **M1: in progress.** Token checks with the paper's prompt: `runs/M1/tokens_20260911-183533` (0
+  region mismatches). Download on the GPU box (Lambda, 1x H100 80 GB):
+  `runs/M1/download_Qwen3.6-27B_20260911-194736` (lens `0731326e…`, 63 layers, width matches).
+  Validation (`m1_validate.py`) has **not** run yet.
 - **M2, M3: code written (stage 3), not executed.** Run folders, one file per prompt, uploads as each
   prompt finishes, resume, controls picked by rule in a separate step you review, two position sets,
   a Mac dry run.
@@ -25,7 +26,10 @@ bash setup.sh
 ```
 
 Idempotent; detects mac/cuda/cpu-linux, installs torch appropriately, installs the package
-editable, and (on `cuda` only) downloads the model + lens and runs the GPU-marked tests too.
+editable, (on `cuda` only) downloads the model + lens, runs the test suite (**not on `cuda`**: the
+suite runs the stand-in with a random lens, which the Mac covers, and M1's validation checks the
+GPU), and writes `requirements-<platform>.lock` (`pip freeze`; git-ignored -- a record of that
+machine's packages, never committed).
 Requires `.env` (copy `.env.example`, fill in `HF_TOKEN`; `GH_TOKEN` is optional -- only needed if
 this machine doesn't already have git/GitHub access configured).
 
@@ -482,13 +486,19 @@ unknown, not "no effect" -- and `panel_c` leaves those out of the flip rates.
 - **Two extra M3 figures**, `flip_heatmap` and `margin_change`, next to the spec's `panel_c` (which is
   unchanged).
 
+- **No tests on the GPU box, and lock files not committed** (decided 2026-09-11): `setup.sh` runs the
+  suite on the Mac only (the spec: also on the GPU box, plus GPU-marked tests, of which there are
+  none -- M1's validation is the GPU check); `requirements-<platform>.lock` is git-ignored (the spec:
+  commit both), since an untracked file would mark every run's code stamp dirty. `nnsight`,
+  `transformers` and `accelerate` are pinned in `pyproject.toml` instead.
+
 ## Known open items (flagged during writing, need your input)
 
-- **Re-run `scripts/m1_tokens.py`** after this stage's code: the prompt now has the paper's wrapper.
-  Its region check (real tokenizer) must still show 0 mismatches -- including the new instruction
-  regions. The stand-in (`[standin]` case of `tests/test_prompts.py::
-  test_region_tokens_spell_their_text_exactly`) may now fail at the wrapper boundaries; that case is
-  M0-only and allowed to fail (decided 2026-09-11).
+- **`scripts/m1_tokens.py` re-run with the paper's wrapper:** `runs/M1/tokens_20260911-183533`, 0
+  region mismatches on the real tokenizer (instruction regions included). `tests/test_prompts.py::
+  test_region_tokens_spell_their_text_exactly` checks the real tokenizer only: the stand-in case (it
+  merges the question's final "." with the blank line after it) always failed and was removed
+  (decided 2026-09-11) -- a known failure made every test run, and setup.sh, fail.
 - **Lens file layout** is parsed heuristically (`lens.load_lens`); the download run's
   `lens_resolved.yaml` shows what was found. Also confirm lens keys are block indices (matching
   `decoder.layers[l]`), not hidden_states indices -- an off-by-one there would be silent.

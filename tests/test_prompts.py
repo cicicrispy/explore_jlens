@@ -140,28 +140,24 @@ def test_mask_rows_carry_everything_the_mask_figure_draws(standin_model):
 
 # Characters a tokenizer is KNOWN to add to a region, beyond the region's exact text, as
 # (before, after) -- decided with the human; anything else is a failure. Regions: the question, each
-# sentence, and (since the paper's wrapper, 2026-09-11) each piece of instruction text. The stand-in
-# (M0) merged the question's final period with the blank line after it into one token ".\n\n" -- with
-# the wrapper that blank line is instruction text, so the stand-in case may now fail differently; the
-# human decided (2026-09-11) that the stand-in case may fail: only the real tokenizer matters from M1
-# on. The real model's tokenizer ends the question with a plain ".". Sentence spans in stimuli.json
-# include the one space before sentences 2-5 (the tokenizers attach it to the next word).
-KNOWN_EXTRA = {
-    "standin": {"question": ("", "\n\n")},
-    "real": {},
-}
+# sentence, and (since the paper's wrapper, 2026-09-11) each piece of instruction text. The real
+# model's tokenizer adds none: it ends the question with a plain ".", and the sentence spans in
+# stimuli.json include the one space before sentences 2-5 (the tokenizers attach it to the next word).
+# Only the REAL tokenizer is checked (human's decision, 2026-09-11): the stand-in, used for results
+# nowhere after M0, merges the question's final period with the blank line after it into one token
+# ".\n\n", so its case always failed -- first accepted as a known failure, then removed because a
+# known failure makes every full test run (and setup.sh) fail.
+KNOWN_EXTRA: dict = {}
 
 
-@pytest.mark.parametrize("which", ["standin", "real"])
-def test_region_tokens_spell_their_text_exactly(which, request):
+def test_region_tokens_spell_their_text_exactly(real_tokenizer):
     """For every prompt, the tokens labelled "question" must spell EXACTLY the question text, and
     the tokens labelled with a sentence's role (matrix/intrusion) that overlap that sentence must
     spell EXACTLY that sentence -- nothing stripped, no extra characters beyond KNOWN_EXTRA. A token
     that also carries characters from outside its region would be edited along with the region, so
-    every such token must be known. Run for the stand-in tokenizer (M0) and the real one (M1). All
-    64 prompts are checked and every mismatch is listed, not just the first."""
-    tok = (request.getfixturevalue("standin_model").tokenizer if which == "standin"
-           else request.getfixturevalue("real_tokenizer"))
+    every such token must be known. Checked on the real model's tokenizer (M1 on). All 64 prompts are
+    checked and every mismatch is listed, not just the first."""
+    tok = real_tokenizer
     stim = _load_stimuli()
     fmt = prompts_mod.make_fmt(tok, stim, _prompt_format())
     problems = []
@@ -169,7 +165,7 @@ def test_region_tokens_spell_their_text_exactly(which, request):
         for qkey in stim["questions"]:
             p = prompts_mod.build_prompt(stimulus, qkey, fmt)
             for r in prompts_mod.region_check(p):
-                before, after = KNOWN_EXTRA[which].get(r["region"], ("", ""))
+                before, after = KNOWN_EXTRA.get(r["region"], ("", ""))
                 if r["tokens_text"] != before + r["region_text"] + after:
                     problems.append(
                         f"{r['stimulus_id']}/{r['question_key']} {r['region']} chars "

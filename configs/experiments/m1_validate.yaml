@@ -11,7 +11,7 @@ milestone: M1
 # REQUIRED before running: the folder name of the scripts/download.py run on this machine, e.g.
 # download_Qwen3.6-27B_20260912-031000 (i.e. runs/M1/<this>/). Its CREDIT.md goes into the summary;
 # its lens_resolved.yaml gives the lens version if configs/lens.yaml's revision_sha is still empty.
-download_run: null
+download_run: download_Qwen3.6-27B_20260911-194736
 
 save_topk: 100       # how many top tokens every check SAVES; each check's own k is applied afterwards
 

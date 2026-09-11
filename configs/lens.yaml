@@ -1,7 +1,7 @@
 # Filled/verified by scripts/download.py at M1. Left as declared-but-unresolved until then.
 repo: "neuronpedia/jacobian-lens"
 filename: "qwen3.6-27b/jlens/Salesforce-wikitext/Qwen3.6-27B_jacobian_lens_n1000.pt"
-revision_sha: null   # resolved via HfApi().repo_info(...).sha at M1, recorded here verbatim
+revision_sha: "0731326edff4ae730ffc5356fe1a4728c748b3a6"   # from runs/M1/download_Qwen3.6-27B_20260911-194736 (lens repo main, 2026-09-11)
 meta: {}             # every non-tensor key from the .pt file, dumped verbatim at M1
 layers: []           # filled at M1
 dtype: null          # filled at M1

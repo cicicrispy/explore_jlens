@@ -224,3 +224,6 @@ runs/**/*.pt
 .DS_Store
 runs/.*.tmp
 .agents/
+# setup.sh's `pip freeze` record of each machine's environment -- kept on that machine, never
+# committed (an untracked file would make every run's code stamp "-dirty"; decided 2026-09-11)
+requirements-*.lock

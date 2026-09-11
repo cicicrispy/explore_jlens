@@ -5,9 +5,9 @@ record of every design decision and every departure from the original specificat
 paper. It describes the **method**; it reports no scientific results.
 
 **Status (2026-09-11).** All code for milestones M0–M3 is written and tested. M0 has run and is
-signed off. M1's tokenizer step has run on a Mac (it must be re-run with the final prompt format);
-M1's GPU steps (model and lens download, lens validation), M2 and M3 have **not** run on the real
-model yet. The whole M2 → M3 pipeline has been exercised end to end on a Mac "dry run" (a small
+signed off. M1's tokenizer step has run on a Mac with the final prompt format (no region mismatch),
+and the model and lens have been downloaded on the GPU machine (lens version `0731326e`, 63 layers,
+width 5,120 as the model's); M1's lens validation, M2 and M3 have **not** run on the real model yet. The whole M2 → M3 pipeline has been exercised end to end on a Mac "dry run" (a small
 stand-in model with a **random** lens), which checks the machinery only: its numbers carry no
 information. Section 12 lists what is pending.
 
@@ -140,10 +140,11 @@ majority character overlap with the regions of the templated text:
   assistant/think prefix). Template tokens are never edited.
 
 Tokens straddling a region boundary are flagged. A region check verifies, for every prompt, that the
-tokens assigned to each region spell exactly that region's text; it must pass on the real tokenizer
-(it passed with the final prompt in the test suite; the M1 tokenizer run is to be repeated). On the
-stand-in tokenizer the question's final period merges with the following blank line into one token,
-so the stand-in fails this check; the stand-in is not used for results and this failure is accepted.
+tokens assigned to each region spell exactly that region's text. It is run on the real tokenizer
+only, and with the final prompt it finds no mismatch (M1 tokenizer run `tokens_20260911-183533`, and
+the test suite). On the stand-in tokenizer the question's final period merges with the following
+blank line into one token; the stand-in is not used for results, and its case was removed from the
+test suite.
 
 **Position sets** (which tokens an M3 intervention edits):
 
@@ -485,6 +486,8 @@ that. No hypothesis tests are run at this stage.
 | Figures on the dataset | (not specified; M0's upload included its figures) | only M3's summary figures and the combined figures | the data is uploaded; figures are redrawable |
 | Extra figures | panel c, margin vs \|Δc\| | also flip heatmap, margin change, M2 rank heatmaps | presentation |
 | Question key | `content_probe` | `content` | naming |
+| Tests on the GPU machine | the full suite, plus GPU-marked tests | none (the suite runs on the Mac) | the suite uses the stand-in and a random lens, which the Mac covers; no GPU-marked tests exist; M1's validation is the GPU check |
+| Lock files | `pip freeze` per platform, committed | written by `setup.sh`, kept on each machine, not committed; `nnsight`, `transformers`, `accelerate` pinned instead | an uncommitted file would mark every run's code version as modified |
 
 Two further operational choices: secrets are loaded only from Python (never by sourcing the secrets
 file in a shell), and a run is resumed only if the code is unchanged since it started.
@@ -493,7 +496,6 @@ file in a shell), and a run is resumed only if the code is unchanged since it st
 
 ## 12. Pending and open items
 
-- Re-run the M1 tokenizer checks with the final prompt; the region check must show no mismatches.
 - M1 on the GPU: download the model and lens, record the lens version, run the validation. **If the
   causal positive control fails at α = 1 and α = 2, the project stops.**
 - The human fills the three layer bands from M1's figures.
@@ -535,6 +537,10 @@ All dates 2026-09-11 unless noted.
   tests and dry run used (the dependency list had allowed newer ones, and no lock file was
   committed). nnsight's "LanguageModel is deprecated" notice is left for after M3: switching the
   loader would change a path the real model has not run through yet.
+- On the GPU box: the stand-in's region-check case, accepted as a known failure, made `setup.sh` stop;
+  it was removed from the test suite (the region check is now run on the real tokenizer only).
+  `setup.sh` no longer runs tests on the GPU machine (nor the GPU-marked step, which had no tests),
+  and its lock files are git-ignored.
 - Figures: M3 summary and combined figures uploaded to the dataset, mask figures and M2 figures not;
   added the flip heatmap, the margin change and the M2 rank heatmaps; panel c kept exactly as
   specified.
