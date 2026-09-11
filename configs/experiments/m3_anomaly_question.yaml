@@ -15,9 +15,9 @@ position_set: question
 band: workspace
 
 # REQUIRED: folder names of finished runs.
-from_m2_run: null          # the same M2 run as the positives run
+from_m2_run: loading_20260911-211140          # the same M2 run as the positives run
 positives_run: null        # runs/M3/<this>/, e.g. positives_question_20260912-031000
-m1_validate_run: null
+m1_validate_run: validate_20260911-205658
 
 directions: [m2i, i2m]
 alpha: 1.0

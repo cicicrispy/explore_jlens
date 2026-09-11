@@ -13,8 +13,8 @@ position_set: question     # must match the positives and anomaly runs that use 
 band: workspace
 
 # REQUIRED: folder names of finished runs.
-from_m2_run: null          # runs/M2/<this>/: the treatment pair (pair_score argmax) + the control pool
-m1_validate_run: null      # runs/M1/<this>/: must have passed
+from_m2_run: loading_20260911-211140          # runs/M2/<this>/: the treatment pair (pair_score argmax) + the control pool
+m1_validate_run: validate_20260911-205658     # runs/M1/<this>/: must have passed, or be accepted in configs/m1_acceptance.yaml
 
 skip_first: 0              # must match the positives and anomaly runs
 

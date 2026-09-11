@@ -11,9 +11,9 @@ position_set: message
 band: workspace
 
 # REQUIRED: folder names of finished runs.
-from_m2_run: null
+from_m2_run: loading_20260911-211140
 positives_run: null        # runs/M3/<this>/, e.g. positives_message_20260912-031000
-m1_validate_run: null
+m1_validate_run: validate_20260911-205658
 
 directions: [m2i, i2m]
 alpha: 1.0
