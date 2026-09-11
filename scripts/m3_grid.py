@@ -157,31 +157,38 @@ def _cells(exp, stim, pair_name, band_layers, selection) -> list:
 
 
 def _logprob_matrix(run_dir, kinds) -> tuple[pd.DataFrame, np.ndarray]:
+    """The stored 16-bit log-probabilities of every cell of these kinds (rows aligned with the table)."""
     t = pq.read_table(Path(run_dir) / "records", filters=[("kind", "in", list(kinds))],
                       columns=["stimulus_id", "question_key", "direction", "kind", "control_index", "logprobs_fp16"])
     col = t.column("logprobs_fp16").combine_chunks()
-    lp = col.flatten().to_numpy(zero_copy_only=False).reshape(len(t), col.type.list_size).astype(np.float32)
+    lp = col.flatten().to_numpy(zero_copy_only=False).reshape(len(t), col.type.list_size).astype(np.float16)
     return t.drop_columns(["logprobs_fp16"]).to_pandas(), lp
 
 
 def _direction_checks(run_dir) -> list[str]:
     """Identity cells of the two directions should be identical; swap / random_direction /
     big_nonlabel are the same edit in both directions (the swap is symmetric), so they should match
-    up to rounding. Reported, not failed."""
+    up to rounding. The log-probabilities are stored in 16-bit, so two values a hair apart can land
+    on neighbouring 16-bit steps (0.0005 near -0.5, 0.03 near -40): "within one 16-bit step" is the
+    storage precision. Reported, not failed."""
     meta, lp = _logprob_matrix(run_dir, ["identity", "swap", "random_direction", "big_nonlabel"])
     lines = []
     for kind in ("identity", "swap", "random_direction", "big_nonlabel"):
         sub = meta[meta["kind"] == kind]
-        diffs, unequal = [], 0
+        diffs, unequal, within = [], 0, 0
         for _, g in sub.groupby(["stimulus_id", "question_key", "control_index"]):
             if set(g["direction"]) != {"m2i", "i2m"}:
                 continue
             a, b = lp[g.index[g["direction"] == "m2i"][0]], lp[g.index[g["direction"] == "i2m"][0]]
-            diffs.append(float(np.abs(a - b).max()))
+            d = np.abs(a.astype(np.float32) - b.astype(np.float32))
+            step = np.spacing(np.maximum(np.abs(a), np.abs(b))).astype(np.float32)
+            diffs.append(float(d.max()))
             unequal += int(not np.array_equal(a, b))
+            within += int((d <= step).all())
         if diffs:
             lines.append(f"  - {kind}: {len(diffs)} m2i/i2m cell pairs; bitwise identical: {len(diffs) - unequal}; "
-                         f"max |Δ logprob| over the vocabulary: {max(diffs):.3g}")
+                         f"every value within one 16-bit step: {within}/{len(diffs)}; "
+                         f"max |Δ logprob|: {max(diffs):.3g}")
     return lines
 
 
@@ -403,7 +410,9 @@ def main() -> None:
         "over all cells (identity cells are never counted -- they edit nothing by design).",
         "- The two directions (reported, not failed): identity cells should be identical; swap, random_direction "
         "and big_nonlabel are the same edit in both directions (the swap is symmetric), so they should match up "
-        "to rounding. Only label_to_present differs by direction.", *direction_lines,
+        "to rounding. Only label_to_present differs by direction. Log-probabilities are stored in 16-bit, whose "
+        "steps are up to 0.03 at these sizes; on the bf16 27B model, rounding inside the network can add more "
+        "(the stored margins and flips are computed in 32-bit before storage).", *direction_lines,
         "- Each control's measured edit size vs the treatment's (same prompt and direction; mean over planned "
         "positions x layers):", *size_lines,
         "- NOT checked: any scientific reading of these numbers.", "",

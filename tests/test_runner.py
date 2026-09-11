@@ -161,9 +161,13 @@ def test_run_prompt_runs_every_kind_and_records_where_the_stream_changed(standin
     # identity is the clean pass: same in both directions, bitwise; every other cell compares to it
     assert np.array_equal(by[("identity", "m2i")].logprobs_fp16, by[("identity", "i2m")].logprobs_fp16)
     assert all(r.clean_margin == by[("identity", "m2i")].margin for r in records)
-    # the swap is symmetric in its two tokens: the two directions are the same edit
-    assert np.allclose(by[("swap", "m2i")].logprobs_fp16.astype(np.float32),
-                       by[("swap", "i2m")].logprobs_fp16.astype(np.float32), atol=1e-2)
+    # the swap is symmetric in its two tokens: the two directions are the same edit. Stored in 16-bit,
+    # they may land on neighbouring 16-bit steps (the 32-bit values differ by rounding, ~1e-4), so
+    # every stored value may differ by at most ONE 16-bit step at its size (0.0005 near -0.5, 0.03
+    # near -40) -- the storage precision; the strict 32-bit check is the next test.
+    a, b = by[("swap", "m2i")].logprobs_fp16, by[("swap", "i2m")].logprobs_fp16
+    step = np.spacing(np.maximum(np.abs(a), np.abs(b))).astype(np.float32)
+    assert (np.abs(a.astype(np.float32) - b.astype(np.float32)) <= step).all()
     assert by[("swap", "m2i")].s_token == by[("swap", "i2m")].t_token == " Spanish"
     # big_nonlabel and random_direction are scaled to the treatment's ||delta h|| per position/layer
     planned = d[d["planned"]].set_index(["direction", "layer", "pos"])
@@ -173,6 +177,21 @@ def test_run_prompt_runs_every_kind_and_records_where_the_stream_changed(standin
             want = planned[planned["kind"] == "swap"].loc[direction, "delta_h_norm"]
             assert np.allclose(got.sort_index().to_numpy(), want.sort_index().to_numpy(), rtol=1e-3, atol=1e-4)
     assert records[0].topk and len(records[0].topk) == 5
+
+
+def test_the_two_swap_directions_are_the_same_edit(standin_model, random_lens):
+    """Before any storage rounding: swapping (Spanish, French) and (French, Spanish) must give the
+    same 32-bit log-probabilities up to float32 rounding (measured 2026-09-11: 7.3e-5; the tolerance
+    is ~14x that)."""
+    cfgs, cells, layers = _cfgs_and_cells(standin_model, random_lens)
+    from jlens_spec import prompts as prompts_mod
+
+    p = prompts_mod.build_prompt(cfgs["stimuli"]["sp_01"], "report", cfgs["fmt"])
+    m = prompts_mod.mask(p, {"question"}, skip_first=0)
+    a, _ = iv.apply(standin_model, random_lens, p, "swap", layers, m, s_token=" Spanish", t_token=" French")
+    b, _ = iv.apply(standin_model, random_lens, p, "swap", layers, m, s_token=" French", t_token=" Spanish")
+    la, lb = torch.log_softmax(a.float(), -1), torch.log_softmax(b.float(), -1)
+    assert float((la - lb).abs().max()) < 1e-3
 
 
 def test_an_edit_outside_the_plan_is_a_hard_failure(standin_model, random_lens, monkeypatch):
