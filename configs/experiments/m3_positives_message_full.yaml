@@ -1,0 +1,32 @@
+# M3 BAND SWEEP (Phase B, GPU), position set "message", band `full` -- POSITIVES run: report + hello.
+# The sweep runs the same experiment over the three bands of configs/bands.yaml so the band is the
+# only thing that changes; `workspace` is already done (positives_message_20260911-221446 /
+# anomaly_message_*), this file is the `full` band.
+#
+#   python scripts/m3_grid.py --experiment configs/experiments/m3_positives_message_full.yaml --store-dir ~/jlens_store
+#
+# Control tokens: the SAME ones as the workspace runs (controls_message_20260911-214953), reused here
+# by the human's decision (2026-09-11) -- see reuse_controls_across_bands below.
+
+name: positives_message_full   # run folders: runs/M3/positives_message_full_<UTC start time>/
+milestone: M3
+
+questions: [report, hello]
+position_set: message
+band: full                     # [18, 62] -- workspace + the motor layers, never the final layer
+
+# REQUIRED: folder names of finished runs.
+from_m2_run: loading_20260911-211140
+controls_run: controls_message_20260911-214953   # picked for the WORKSPACE band; reused here
+m1_validate_run: validate_20260911-205658
+
+# Accept control tokens picked for another band (controls.selection_problems ignores band_layers).
+# The picks are then not size-matched inside this band: their |Δc| ratios drift from 1.00, and every
+# summary says so. Without this, a run refuses a selection whose band is not its own.
+reuse_controls_across_bands: true
+
+directions: [m2i, i2m]
+alpha: 1.0
+seed: 0
+skip_first: 0
+save_topk: 100

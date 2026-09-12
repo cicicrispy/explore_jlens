@@ -1,0 +1,27 @@
+# M3 BAND SWEEP (Phase B, GPU), position set "message", band `early_late` -- POSITIVES: report + hello.
+# The third point of the sweep: two blocks, [[18, 33], [45, 55]], with the 34-44 block skipped.
+#
+#   python scripts/m3_grid.py --experiment configs/experiments/m3_positives_message_early_late.yaml --store-dir ~/jlens_store
+#
+# Control tokens: the SAME ones as the workspace runs (controls_message_20260911-214953), reused here
+# by the human's decision (2026-09-11) -- see reuse_controls_across_bands below.
+
+name: positives_message_early_late
+milestone: M3
+
+questions: [report, hello]
+position_set: message
+band: early_late
+
+# REQUIRED: folder names of finished runs.
+from_m2_run: loading_20260911-211140
+controls_run: controls_message_20260911-214953   # picked for the WORKSPACE band; reused here
+m1_validate_run: validate_20260911-205658
+
+reuse_controls_across_bands: true   # see m3_positives_message_full.yaml
+
+directions: [m2i, i2m]
+alpha: 1.0
+seed: 0
+skip_first: 0
+save_topk: 100

@@ -125,6 +125,39 @@ def test_m3_from_parquet_round_trip(tmp_path):
     assert tmp_path / "figures" / "png" / "masks" / "sp_01_report.png" in written
 
 
+def test_by_language_draws_each_language_on_the_whole_runs_axes(tmp_path):
+    """The summary figures per passage language, from the same records; the scales must be the whole
+    run's, or the two languages cannot be read against each other."""
+    _m3_run(tmp_path)
+    written = figures.m3_by_language(tmp_path, formats=("png",))
+    names = [f"{n}_{lang}" for lang in ("es", "fr")
+             for n in ("flip_heatmap", "margin_change", "margin_vs_deltac_anomaly", "margin_vs_deltac_report")]
+    assert _files(written) == sorted(f"{n}.png" for n in names)
+
+    df = figures.read_records(tmp_path)
+    df.loc[df["stimulus_id"].str.startswith("sp"), "margin"] = 4.0   # the Spanish passages move further
+    whole, es = figures.delta_limits(df), df[df["stimulus_id"].str.startswith("sp")]
+    assert figures.delta_limits(es) != pytest.approx(whole)          # the subsets really do differ
+    fig = figures.margin_change(es, ylim=whole)
+    assert fig.axes[0].get_ylim() == pytest.approx(whole)            # not the Spanish subset's own range
+
+
+def test_moves_draws_a_figure_per_question_pooled_and_per_language(tmp_path):
+    """One panel per intervention kind; each question drawn with both languages, es-only and
+    fr-only, all on the whole run's axes. Identity is the start of every line, never a panel."""
+    _m3_run(tmp_path)
+    written = figures.m3_moves(tmp_path, formats=("png",))
+    assert _files(written) == sorted(f"margin_moves_{q}{tag}.png" for q in ("anomaly", "report")
+                                     for tag in ("", "_es", "_fr"))
+
+    rows = figures.move_rows(figures.read_records(tmp_path))
+    assert set(rows["kind"]) == {"swap", "label_to_present", "big_nonlabel", "random_direction"}
+    assert (rows["clean_margin"] != rows["margin"]).any()        # a line with two distinct ends
+    fig = figures.margin_moves(figures.read_records(tmp_path), "anomaly")
+    assert [ax.get_title() for ax in fig.axes] == \
+        [figures.KIND_LABELS[k] for k in ("swap", "label_to_present", "big_nonlabel", "random_direction")]
+
+
 def test_presentation_figures_count_an_edit_made_the_same_in_both_directions_once(tmp_path):
     d = figures._one_edit_each(figures.read_records(_m3_run(tmp_path)))
     assert len(d[d["kind"] == "swap"]) == 4 and set(d.loc[d["kind"] == "swap", "direction"]) == {"m2i"}

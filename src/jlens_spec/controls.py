@@ -215,12 +215,24 @@ def classify_tokens(token_ids, tokenizer, ineligible, answer_ids, passage_words)
     return pd.DataFrame(rows, columns=["token_id", "token", "excluded_reason"])
 
 
-def selection_problems(selection: dict, **expected) -> list[str]:
+REUSABLE_ACROSS = ("band_layers",)   # the only setting a run may knowingly not match; see below
+
+
+def selection_problems(selection: dict, ignore=(), **expected) -> list[str]:
     """Why a controls/selection.yaml can't be used by a run with these settings ([] = it can): it must
     be written by the current rules (SELECTION_VERSION) and match the run on every MATCH_KEYS setting,
     all of which must be given. The code version that picked it (recorded as git_commit) is NOT
     compared: the controls may be picked again after M2 while the code changes for other reasons, and
-    a change of the rules themselves bumps SELECTION_VERSION."""
+    a change of the rules themselves bumps SELECTION_VERSION.
+
+    `ignore=("band_layers",)` -- the band sweep's experiment files (`reuse_controls_across_bands:
+    true`), decided by the human 2026-09-11 -- accepts a selection picked for ANOTHER band, so that
+    the same control tokens run in every band and the band is the only thing that changes. The picks
+    are then no longer size-matched inside this run's band: their |Δc| ratios drift away from 1.00,
+    which every run's summary reports. Nothing else may be ignored."""
+    bad = [k for k in ignore if k not in REUSABLE_ACROSS]
+    if bad:
+        raise ValueError(f"selection_problems: {bad} may not be ignored (only {list(REUSABLE_ACROSS)})")
     missing = [k for k in MATCH_KEYS if k not in expected]
     if missing:
         raise ValueError(f"selection_problems needs {missing}")
@@ -228,7 +240,7 @@ def selection_problems(selection: dict, **expected) -> list[str]:
         return [f"selection_version {selection.get('selection_version')} -- picked by other rules "
                 f"(this code expects {SELECTION_VERSION})"]
     return [f"{k}: {selection.get(k)!r} there, {expected[k]!r} here" for k in MATCH_KEYS
-            if selection.get(k) != expected[k]]
+            if k not in ignore and selection.get(k) != expected[k]]
 
 
 def coverage_text(ratio: float) -> str:

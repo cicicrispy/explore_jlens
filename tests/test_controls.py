@@ -150,6 +150,21 @@ def test_selection_check_refuses_each_mismatch_but_accepts_other_code():
         controls.selection_problems(sel, position_set="question")      # every setting must be given
 
 
+def test_a_selection_from_another_band_is_used_only_when_the_run_asks_for_it():
+    """The band sweep holds the control tokens fixed across bands (reuse_controls_across_bands):
+    band_layers may be ignored, every other mismatch still refuses, and nothing else is ignorable."""
+    settings = dict(position_set="message", band_layers=[18, 19, 20, 21], from_m2_run="loading_1",
+                    pair_words=[" Spanish", " French"], skip_first=0)
+    sel = {"selection_version": controls.SELECTION_VERSION, **{**settings, "band_layers": [18, 19, 20]}}
+
+    assert len(controls.selection_problems(sel, **settings)) == 1
+    assert controls.selection_problems(sel, ignore=("band_layers",), **settings) == []
+    other_m2 = controls.selection_problems(sel, ignore=("band_layers",), **{**settings, "from_m2_run": "loading_2"})
+    assert len(other_m2) == 1 and other_m2[0].startswith("from_m2_run")
+    with pytest.raises(ValueError, match="may not be ignored"):
+        controls.selection_problems(sel, ignore=("pair_words",), **settings)
+
+
 def _treat(cov_in=0.5, cov_out=0.5, dc=1.0):
     return {k: {"cov_swapped_in": cov_in, "cov_removed": cov_out, "dc": dc} for k in CHECKS}
 

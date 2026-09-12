@@ -632,18 +632,34 @@ def flip_heatmap(df: pd.DataFrame, suffix: str = ""):
     return fig
 
 
-def margin_change(df: pd.DataFrame, suffix: str = ""):
+def _per_passage_delta(df: pd.DataFrame) -> pd.DataFrame:
+    """Every non-identity cell with `delta` (margin − the same prompt's clean margin) and `lang`,
+    one edit each. What margin_change's dots are averaged from."""
+    d = _one_edit_each(df[df["kind"] != "identity"])
+    return d.assign(delta=d["margin"] - d["clean_margin"], lang=d["stimulus_id"].map(loading_mod._matrix_lang_of))
+
+
+def delta_limits(df: pd.DataFrame, pad: float = 0.05) -> tuple[float, float]:
+    """The y range margin_change needs for `df`, from the per-passage means it draws as dots. Pass it
+    back as `ylim` when the same scale must hold across several figures (m3_by_language)."""
+    dots = _per_passage_delta(df).groupby(["question_key", "kind", "stimulus_id", "lang"])["delta"].mean()
+    lo, hi = float(dots.min()), float(dots.max())
+    margin = pad * (hi - lo) or 1.0
+    return lo - margin, hi + margin
+
+
+def margin_change(df: pd.DataFrame, suffix: str = "", ylim: tuple[float, float] | None = None):
     """How far each edit moved the answer: one panel per question; for swap and the three controls,
     Δ = margin with the edit − the clean margin of the same prompt, in that question's own units
     (MARGIN_LABELS; natural log). Bar = the mean over passages; dots = the passages (a pooled kind's
     dot averages that passage's cells), colored by passage language. Identity is the zero line. One
-    y scale for every panel. `df` = M3 records."""
+    y scale for every panel -- `ylim` fixes it (delta_limits), so figures drawn from different subsets
+    of the same run can be read against each other. `df` = M3 records."""
     from matplotlib.lines import Line2D
 
     plt = _plt()
 
-    d = _one_edit_each(df[df["kind"] != "identity"])
-    d = d.assign(delta=d["margin"] - d["clean_margin"], lang=d["stimulus_id"].map(loading_mod._matrix_lang_of))
+    d = _per_passage_delta(df)
     kinds = [k for k in ("swap", "label_to_present", "big_nonlabel", "random_direction") if k in set(d["kind"])]
     questions = _questions_in(d)
     bar_colors = {"swap": "#c0392b", "label_to_present": "#8a8a8a", "big_nonlabel": "#a9a9a9",
@@ -667,6 +683,8 @@ def margin_change(df: pd.DataFrame, suffix: str = ""):
         ax.set_title(q, fontsize=10)
         ax.set_ylabel(f"Δ [{MARGIN_LABELS.get(q, 'margin')}]", fontsize=8)
         ax.tick_params(axis="y", labelleft=True, labelsize=8)  # every panel has its own units
+        if ylim is not None:
+            ax.set_ylim(*ylim)
     fig.legend(handles=[Line2D([], [], marker="o", linestyle="", color=dot_colors["es"], label="Spanish passages"),
                         Line2D([], [], marker="o", linestyle="", color=dot_colors["fr"], label="French passages")],
                loc="lower center", ncol=2, fontsize=8, frameon=False)
@@ -676,11 +694,9 @@ def margin_change(df: pd.DataFrame, suffix: str = ""):
     return fig
 
 
-def margin_vs_deltac(df: pd.DataFrame, question_key: str):
-    """Margin vs mean |delta_c| over intervened positions, one point per cell. `df` = records.parquet;
-    `intervention_logs` comes back from parquet as an array of dicts (possibly empty)."""
-    plt = _plt()
-
+def deltac_points(df: pd.DataFrame, question_key: str) -> list[tuple[float, float, str]]:
+    """(mean |delta_c| over the intervened positions, margin, kind) for every cell of this question
+    that recorded a log. `intervention_logs` comes back from parquet as an array of dicts."""
     points = []
     for r in df[df["question_key"] == question_key].itertuples(index=False):
         logs = r.intervention_logs
@@ -688,6 +704,16 @@ def margin_vs_deltac(df: pd.DataFrame, question_key: str):
             continue
         deltas = [lg["delta_c_norm"] for lg in logs]
         points.append((sum(deltas) / len(deltas), r.margin, r.kind))
+    return points
+
+
+def margin_vs_deltac(df: pd.DataFrame, question_key: str, suffix: str = "", xlim=None, ylim=None):
+    """Margin vs mean |delta_c| over intervened positions, one point per cell. `xlim`/`ylim` fix the
+    axes so figures drawn from different subsets of one run can be read against each other
+    (m3_by_language). `df` = records.parquet."""
+    plt = _plt()
+
+    points = deltac_points(df, question_key)
 
     fig, ax = plt.subplots(figsize=(6, 5))
     for kind in sorted(set(p[2] for p in points)):
@@ -695,8 +721,13 @@ def margin_vs_deltac(df: pd.DataFrame, question_key: str):
                    label=kind, alpha=0.7, s=18)
     ax.set_xlabel("mean |delta_c| over intervened positions")
     ax.set_ylabel("margin")
-    ax.set_title(question_key)
+    ax.set_title(f"{question_key}{suffix}", fontsize=10)
+    if xlim is not None:
+        ax.set_xlim(*xlim)
+    if ylim is not None:
+        ax.set_ylim(*ylim)
     ax.legend(fontsize=7)
+    fig.tight_layout()
     return fig
 
 
@@ -843,6 +874,153 @@ def _m3(run_dir: Path, formats, out_dir) -> list[Path]:
                 f, columns=["kind", "direction", "control_index", "layer", "pos", "planned", "change"]))
             written += save(fig, f"masks/{f.stem}", formats, run_dir, out_dir)
     return written
+
+
+LANG_NAMES = {"es": "Spanish passages", "fr": "French passages"}
+LANG_COLORS = {"es": "#e69f00", "fr": "#0072b2"}
+
+
+def move_rows(df: pd.DataFrame, x_field: str = "delta_c_norm") -> pd.DataFrame:
+    """One row per non-identity cell: where it started (its prompt's clean margin, at size 0) and
+    where it ended (the cell's own margin, at its mean `x_field` over the intervened positions).
+    `x_field` is "delta_c_norm" (the size in the swap's own 2-D plane -- 0 for random_direction,
+    which moves along a direction outside that plane) or "delta_h_norm" (the size in the residual
+    stream, which every kind is matched on).
+
+    One edit each, as in every presentation figure: swap, big_nonlabel and random_direction are the
+    same computation in both directions (the paper's swap exchanges the two coordinates, so naming
+    either token the source gives the same target), so their i2m cell is left out rather than counted
+    twice; label_to_present removes a different label in each direction, so both of its cells stay.
+    Nothing is averaged. Each row carries the clean margin of its own prompt -- the one control value,
+    repeated so that every experimental cell has its pair."""
+    rows = []
+    for r in _one_edit_each(df[df["kind"] != "identity"]).itertuples(index=False):
+        logs = r.intervention_logs
+        if logs is None or len(logs) == 0:
+            continue
+        rows.append({"stimulus_id": r.stimulus_id, "question_key": r.question_key, "kind": r.kind,
+                     "direction": r.direction, "control_index": r.control_index,
+                     "lang": loading_mod._matrix_lang_of(r.stimulus_id),
+                     "size": sum(lg[x_field] for lg in logs) / len(logs),
+                     "margin": r.margin, "clean_margin": r.clean_margin})
+    return pd.DataFrame(rows)
+
+
+def margin_moves(df: pd.DataFrame, question_key: str, suffix: str = "", x_field: str = "delta_c_norm",
+                 xlim=None, ylim=None):
+    """Where each edit moved the answer, one panel per intervention kind: every cell is a line from
+    its prompt's clean margin at size 0 (what identity gives -- identity changes nothing) out to the
+    margin that cell ended with, at that cell's mean edit size. Colored by passage language; the
+    dashed line at 0 is the flip boundary, so a line crossing it is a flipped answer.
+
+    A pooled kind draws one line per cell (label_to_present: 3 tokens x 2 directions per passage;
+    big_nonlabel: 3 pairs), so the spread within a kind is visible. All panels share both axes.
+    `df` = M3 records; see move_rows for `x_field`."""
+    from matplotlib.lines import Line2D
+
+    plt = _plt()
+
+    rows = move_rows(df[df["question_key"] == question_key], x_field)
+    kinds = [k for k in ("swap", "label_to_present", "big_nonlabel", "random_direction")
+             if k in set(rows["kind"])]
+    fig, axes = plt.subplots(1, len(kinds) or 1, figsize=(2.9 * (len(kinds) or 1) + 1.0, 4.6),
+                             sharey=True, sharex=True, squeeze=False)
+    for ax, k in zip(axes[0], kinds):
+        for r in rows[rows["kind"] == k].itertuples(index=False):
+            color = LANG_COLORS.get(r.lang, "black")
+            ax.plot([0.0, r.size], [r.clean_margin, r.margin], color=color, linewidth=0.9, alpha=0.55, zorder=1)
+            ax.scatter([r.size], [r.margin], s=14, color=color, edgecolors="white", linewidths=0.4, zorder=2)
+            ax.scatter([0.0], [r.clean_margin], s=9, color="black", alpha=0.5, zorder=2)
+        ax.axhline(0, color="black", linestyle="--", linewidth=0.8, zorder=0)
+        ax.set_title(KIND_LABELS.get(k, k), fontsize=9)
+        ax.set_xlabel(f"mean |{'Δc' if x_field == 'delta_c_norm' else 'Δh'}| over intervened positions", fontsize=8)
+        ax.tick_params(labelsize=8)
+        if xlim is not None:
+            ax.set_xlim(*xlim)
+        if ylim is not None:
+            ax.set_ylim(*ylim)
+    axes[0][0].set_ylabel(MARGIN_LABELS.get(question_key, "margin"), fontsize=8)
+    fig.legend(handles=[Line2D([], [], marker="o", linestyle="-", color=LANG_COLORS["es"], label="Spanish passages"),
+                        Line2D([], [], marker="o", linestyle="-", color=LANG_COLORS["fr"], label="French passages"),
+                        Line2D([], [], marker="o", linestyle="", color="black", alpha=0.5, label="clean (identity)")],
+               loc="lower center", ncol=3, fontsize=8, frameon=False)
+    fig.suptitle(f"Where each edit moved the answer -- {question_key}{suffix}\none line per cell, from its prompt's "
+                 "clean margin to the edited margin; dashed line = the flip boundary", fontsize=9)
+    fig.tight_layout(rect=(0, 0.07, 1, 0.88))
+    return fig
+
+
+def m3_moves(run_dir, formats=("png",), out_dir=None, x_field: str = "delta_c_norm") -> list[Path]:
+    """`margin_moves_<question>` for every question of an M3 run -- both languages together, and then
+    `_es` and `_fr` on their own -- every one of them on the WHOLE run's axes, so the three can be
+    read against each other (`python scripts/make_figures.py <run folder> --moves`). Nothing is
+    recomputed from the model."""
+    run_dir = Path(run_dir)
+    if _missing(run_dir, "records"):
+        return []
+    df = read_records(run_dir)
+    df = df.assign(lang=df["stimulus_id"].map(loading_mod._matrix_lang_of))
+    suffix = title_suffix(_params(run_dir))
+    rows = move_rows(df, x_field)
+    xlim = _pad((0.0, float(rows["size"].max()))) if len(rows) else None
+    ylim = _pad((float(min(rows["margin"].min(), rows["clean_margin"].min())),
+                 float(max(rows["margin"].max(), rows["clean_margin"].max())))) if len(rows) else None
+    subsets = [("", df, "")] + [(f"_{lang}", df[df["lang"] == lang], f" -- {LANG_NAMES.get(lang, lang)}")
+                                for lang in sorted(df["lang"].dropna().unique())]
+    written = []
+    for q in sorted(df["question_key"].unique()):
+        for tag, d, extra in subsets:
+            written += save(margin_moves(d, q, suffix + extra, x_field, xlim=xlim, ylim=ylim),
+                            f"margin_moves_{q}{tag}", formats, run_dir, out_dir)
+    return written
+
+
+def m3_by_language(run_dir, formats=("png",), out_dir=None) -> list[Path]:
+    """The M3 summary figures again, drawn for one passage language at a time: `flip_heatmap_<lang>`,
+    `margin_change_<lang>`, `margin_vs_deltac_<question>_<lang>`. Same figures, same code, the records
+    filtered by the passage's matrix language -- so a one-sided effect (the workspace runs flip the
+    French passages and not the Spanish ones) is visible per language instead of pooled.
+
+    The axes are fixed to the WHOLE run's range (delta_limits, deltac_points), so the two languages'
+    figures can be read against each other; the flip heatmap is already on a fixed 0-1 scale. panel_c
+    is not repeated -- it splits by language already (one bar per direction x language).
+
+    Nothing is recomputed from the model: `python scripts/make_figures.py <run folder> --by-language`.
+    """
+    run_dir = Path(run_dir)
+    if _missing(run_dir, "records"):
+        return []
+    df = read_records(run_dir)
+    df = df.assign(lang=df["stimulus_id"].map(loading_mod._matrix_lang_of))
+    base = title_suffix(_params(run_dir))
+    ylim = delta_limits(df)
+    questions = sorted(df["question_key"].unique())
+    limits = {}
+    for q in questions:
+        pts = deltac_points(df, q)
+        limits[q] = ((min(p[0] for p in pts), max(p[0] for p in pts)),
+                     (min(p[1] for p in pts), max(p[1] for p in pts))) if pts else (None, None)
+    written = []
+    for lang in sorted(df["lang"].dropna().unique()):
+        d = df[df["lang"] == lang]
+        suffix = f"{base} -- {LANG_NAMES.get(lang, lang)}"
+        written += save(flip_heatmap(d, suffix), f"flip_heatmap_{lang}", formats, run_dir, out_dir)
+        written += save(margin_change(d, suffix, ylim=ylim), f"margin_change_{lang}", formats, run_dir, out_dir)
+        for q in questions:
+            xlim, ylim_q = limits[q]
+            written += save(margin_vs_deltac(d, q, suffix=f" -- {LANG_NAMES.get(lang, lang)}", xlim=_pad(xlim),
+                                             ylim=_pad(ylim_q)),
+                            f"margin_vs_deltac_{q}_{lang}", formats, run_dir, out_dir)
+    return written
+
+
+def _pad(lim, frac: float = 0.05):
+    """A (lo, hi) range widened by `frac` of its width, so points don't sit on the frame."""
+    if lim is None:
+        return None
+    lo, hi = lim
+    pad = frac * (hi - lo) or 1.0
+    return lo - pad, hi + pad
 
 
 # Settings two M3 runs must share to be drawn in one combined panel c.

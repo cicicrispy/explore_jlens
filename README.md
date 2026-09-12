@@ -275,6 +275,47 @@ dataset`), after which the run is backed up the normal way and nothing inside it
 `--store-dir` run **with the same `--store-dir`**: a prompt counts as done when its files are in the
 store, and that store is the folder.
 
+**Figures split by passage language** (no model, no GPU -- from a finished run's saved records):
+
+```bash
+python scripts/make_figures.py runs/M3/positives_message_20260911-221446 --by-language
+```
+
+writes `flip_heatmap_es/_fr`, `margin_change_es/_fr` and `margin_vs_deltac_<question>_es/_fr` beside
+the run's normal figures, each drawn on the **whole run's** axes so the two languages can be read
+against each other. panel c is not repeated -- it already splits by direction × language.
+
+```bash
+python scripts/make_figures.py runs/M3/anomaly_message_20260911-230403 --moves
+```
+
+writes `margin_moves_<question>` and its `_es` / `_fr` versions: **one panel per intervention kind**,
+and inside a panel one line per cell, from that prompt's clean margin (at x = 0, which is what
+identity gives) out to the margin the edit ended with, at that cell's mean |Δc|. Colored by passage
+language, with the flip boundary dashed at 0. Cells are counted as in every other presentation
+figure — one edit each, so the kinds that are the same edit in both directions are drawn once per
+passage and label→present twice.
+
+`--x-size delta_h_norm` puts the residual-stream size on the x axis instead of |Δc| — worth doing
+once, because `random_direction` moves outside the swap's 2-D plane and so sits at |Δc| = 0 by
+construction.
+
+**The band sweep** (`message` position set, after the four workspace runs): the same experiment over
+the other two bands, positives then anomaly in each, so the band is the only difference.
+
+```bash
+python scripts/m3_grid.py --experiment configs/experiments/m3_positives_message_full.yaml --store-dir ~/jlens_store
+# read its summary, put its folder name into positives_run: of the anomaly file, then:
+python scripts/m3_grid.py --experiment configs/experiments/m3_anomaly_message_full.yaml --store-dir ~/jlens_store
+# and the same two for ..._early_late.yaml
+```
+
+These files carry `reuse_controls_across_bands: true`: they use the **workspace** band's control
+tokens (`controls_message_20260911-214953`) instead of picking new ones, so one set of controls runs
+in every band. `controls.selection_problems` then ignores `band_layers` -- and nothing else. The cost
+is real and is printed in every such run's summary: the picks are no longer size-matched inside the
+new band, so their |Δc| ratios drift away from 1.00. Read those ratios before comparing bands.
+
 Fill `from_m2_run` and `m1_validate_run` (and `controls_run` in the positives files, `positives_run`
 in the anomaly files) with folder names first. **Hygiene invariant 7's "positive controls first; if
 they don't flip, stop"** is your decision between the two runs: the anomaly run refuses to start

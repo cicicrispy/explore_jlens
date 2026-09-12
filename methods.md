@@ -521,6 +521,8 @@ that. No hypothesis tests are run at this stage.
 | Extra figures | panel c, margin vs \|Δc\| | also flip heatmap, margin change, M2 rank heatmaps | presentation |
 | Question key | `content_probe` | `content` | naming |
 | Tests on the GPU machine | the full suite, plus GPU-marked tests | none (the suite runs on the Mac) | the suite uses the stand-in and a random lens, which the Mac covers; no GPU-marked tests exist; M1's validation is the GPU check |
+| M3 bands | the workspace band only (`full` and `early_late` are Stage 2) | also `full` and `early_late`, for the `message` position set: the same experiment three times, the band the only difference (`m3_*_message_full.yaml`, `m3_*_message_early_late.yaml`) | the workspace run's effect is one-sided (French passages flip, Spanish ones do not); the sweep says whether that depends on the band (2026-09-11) |
+| Control tokens across bands | picked per band, matched to the treatment's size and coverage inside it | the sweep's runs reuse the **workspace** band's picks (`reuse_controls_across_bands: true`; `controls.selection_problems` then ignores `band_layers`, and nothing else) | one set of control tokens keeps the band the only thing that changes; the cost is that the picks are no longer size-matched inside the other bands, which every summary reports in its \|Δc\| ratios |
 | Backup of a run | the HF dataset is the only backup, and a run is finished only when its `summary.md` is there | unchanged by default; `scripts/m3_grid.py --store-dir <folder>` writes a run to a folder on the machine instead, and that folder is then the run's store (reads still fall back to the dataset, so earlier runs still count as finished) | the Hub refused writes during the last M3 run (2026-09-11); the run is uploaded to the dataset afterwards and nothing inside it changes |
 | Lock files | `pip freeze` per platform, committed | written by `setup.sh`, kept on each machine, not committed; `nnsight`, `transformers`, `accelerate` pinned instead | an uncommitted file would mark every run's code version as modified |
 
@@ -655,6 +657,10 @@ All dates 2026-09-11 unless noted.
   names still count as finished, and nothing is committed to the Hub. Chosen over a plain
   `--no-upload` flag because resume counts a prompt as done only when its files are **in the store**,
   which a local store keeps true. The run is uploaded to the dataset afterwards.
+- Band sweep (decided after the four workspace runs): the `message` position set is run again over
+  `full` and `early_late`, positives and anomaly in each, with the workspace band's control tokens
+  reused so that the band is the only difference. M1's positive control is **not** swept — it stays
+  accepted at the paper's `[0.25, 0.75]` layer range.
 - Figures: M3 summary and combined figures uploaded to the dataset, mask figures and M2 figures not;
   added the flip heatmap, the margin change and the M2 rank heatmaps; panel c kept exactly as
   specified.

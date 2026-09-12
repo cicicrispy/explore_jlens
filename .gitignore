@@ -3,6 +3,7 @@ __pycache__/
 *.py[codz]
 *$py.class
 runs/
+figures_check/
 # C extensions
 *.so
 

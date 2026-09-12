@@ -1,0 +1,26 @@
+# M3 BAND SWEEP (Phase B, GPU), position set "message", band `full` -- ANOMALY run: anomaly + content.
+# Launch after reading the summary of this band's positives run (hygiene invariant 7).
+#
+#   python scripts/m3_grid.py --experiment configs/experiments/m3_anomaly_message_full.yaml --store-dir ~/jlens_store
+#
+# Uses the control tokens of its positives run (which reused the workspace band's picks).
+
+name: anomaly_message_full     # run folders: runs/M3/anomaly_message_full_<UTC start time>/
+milestone: M3
+
+questions: [anomaly, content]
+position_set: message
+band: full
+
+# REQUIRED: folder names of finished runs.
+from_m2_run: loading_20260911-211140
+positives_run: null            # fill in runs/M3/positives_message_full_<time> once it has finished
+m1_validate_run: validate_20260911-205658
+
+reuse_controls_across_bands: true   # the picks came from the workspace band -- see the positives file
+
+directions: [m2i, i2m]
+alpha: 1.0
+seed: 0
+skip_first: 0
+save_topk: 100

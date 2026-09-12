@@ -259,8 +259,13 @@ def main() -> None:
     # Either must match this run's settings; the code version is not compared (selection_problems).
     source = ctl_run if positives else pos_run
     selection = yaml.safe_load(pipeline.fetch(root / "M3" / source / SELECTION, store).read_text())
+    # The band sweep (reuse_controls_across_bands: true) keeps one set of control tokens across the
+    # bands, so the band is the only thing that changes; the picks are then not size-matched inside
+    # this band and their |Δc| ratios drift from 1.00 (reported in section 2 as always).
+    reuse_bands = bool(exp.get("reuse_controls_across_bands"))
     problems = controls_mod.selection_problems(
-        selection, position_set=exp["position_set"], band_layers=band_layers, from_m2_run=m2_run,
+        selection, ignore=("band_layers",) if reuse_bands else (),
+        position_set=exp["position_set"], band_layers=band_layers, from_m2_run=m2_run,
         pair_words=pair_words, skip_first=exp["skip_first"])
     if problems:
         raise SystemExit(f"{'controls' if positives else 'positives'} run {source} can't be used by this run: "
@@ -274,6 +279,10 @@ def main() -> None:
     else:
         controls_source = (f"reused from positives run {pos_run}, which took them from controls run "
                            f"{selection.get('controls_run')}")
+    if reuse_bands:
+        controls_source += (f"; PICKED FOR ANOTHER BAND -- layers {figures.layers_text(selection['band_layers'])}, "
+                            f"reused here over {exp['band']} (reuse_controls_across_bands: the band sweep keeps one "
+                            "set of control tokens, so the sizes below are not matched inside this band)")
     ctl_lines = controls_mod.control_lines(selection, exp["questions"])
     print("\n".join(ctl_lines), flush=True)
 
@@ -410,7 +419,11 @@ def main() -> None:
         + (f"; last error: {bg_error}" if bg_error else ""),
         f"- Files downloaded from the store at the end (computed on another machine): {len(downloaded)}",
         *([f"- NOT uploaded to the HF dataset: this run was written to {args.store_dir} (--store-dir), which is its "
-           "only backup until someone uploads the run folder to the dataset."] if args.store_dir else []), "",
+           "only backup until someone uploads the run folder to the dataset."] if args.store_dir else []),
+        *([f"- Control tokens picked for band layers {figures.layers_text(selection['band_layers'])}, not this run's "
+           f"{exp['band']} (reuse_controls_across_bands): the band sweep holds the control tokens fixed, so their "
+           "sizes above are NOT matched inside this band -- read the |Δc| ratios before comparing bands."]
+          if reuse_bands else []), "",
         "## 5. Per-control flip rate and mean margin", "",
         "| kind | # | control | question | direction | flip rate | mean margin | n |", "|---|---|---|---|---|---|---|---|",
         *[f"| {r.kind} | {r.control_index} | {r.control!r} | {r.question_key} | {r.direction} | {r.flip_rate:.3f} | "
