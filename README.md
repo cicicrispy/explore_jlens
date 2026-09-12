@@ -294,7 +294,10 @@ and inside a panel one line per cell, from that prompt's clean margin (at x = 0,
 identity gives) out to the margin the edit ended with, at that cell's mean |Δc|. Colored by passage
 language, with the flip boundary dashed at 0. Cells are counted as in every other presentation
 figure — one edit each, so the kinds that are the same edit in both directions are drawn once per
-passage and label→present twice.
+passage and label→present twice. Each panel's title carries a p from `scipy.stats.wilcoxon`
+(two-sided, `zero_method="zsplit"` so a pair whose edit changed nothing stays in the test) over
+exactly the lines drawn in that panel — each line's clean margin paired with its edited margin — with
+n = the number of lines.
 
 `--x-size delta_h_norm` puts the residual-stream size on the x axis instead of |Δc| — worth doing
 once, because `random_direction` moves outside the swap's 2-D plane and so sits at |Δc| = 0 by

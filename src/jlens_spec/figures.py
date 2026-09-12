@@ -906,6 +906,21 @@ def move_rows(df: pd.DataFrame, x_field: str = "delta_c_norm") -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _panel_p_text(panel: pd.DataFrame) -> str:
+    """One panel's p: scipy.stats.wilcoxon, two-sided, over the pairs that panel draws -- each line's
+    clean margin against its edited margin. Every pair stays in the test, including those whose two
+    ends are equal (`zero_method="zsplit"`: a zero difference is kept and its rank split between the
+    two sides, rather than scipy's default of dropping it), so n is always the number of lines drawn
+    and a panel where nothing moved gets p = 1."""
+    from scipy.stats import wilcoxon
+
+    n = len(panel)
+    if n == 0:
+        return "no lines"
+    p = float(wilcoxon(panel["margin"], panel["clean_margin"], zero_method="zsplit").pvalue)
+    return f"p {'< 0.001' if p < 0.001 else f'= {p:.3f}'} (n = {n})"
+
+
 def margin_moves(df: pd.DataFrame, question_key: str, suffix: str = "", x_field: str = "delta_c_norm",
                  xlim=None, ylim=None):
     """Where each edit moved the answer, one panel per intervention kind: every cell is a line from
@@ -926,13 +941,14 @@ def margin_moves(df: pd.DataFrame, question_key: str, suffix: str = "", x_field:
     fig, axes = plt.subplots(1, len(kinds) or 1, figsize=(2.9 * (len(kinds) or 1) + 1.0, 4.6),
                              sharey=True, sharex=True, squeeze=False)
     for ax, k in zip(axes[0], kinds):
-        for r in rows[rows["kind"] == k].itertuples(index=False):
+        panel = rows[rows["kind"] == k]
+        for r in panel.itertuples(index=False):
             color = LANG_COLORS.get(r.lang, "black")
             ax.plot([0.0, r.size], [r.clean_margin, r.margin], color=color, linewidth=0.9, alpha=0.55, zorder=1)
             ax.scatter([r.size], [r.margin], s=14, color=color, edgecolors="white", linewidths=0.4, zorder=2)
             ax.scatter([0.0], [r.clean_margin], s=9, color="black", alpha=0.5, zorder=2)
         ax.axhline(0, color="black", linestyle="--", linewidth=0.8, zorder=0)
-        ax.set_title(KIND_LABELS.get(k, k), fontsize=9)
+        ax.set_title(f"{KIND_LABELS.get(k, k)}\n{_panel_p_text(panel)}", fontsize=9)
         ax.set_xlabel(f"mean |{'Δc' if x_field == 'delta_c_norm' else 'Δh'}| over intervened positions", fontsize=8)
         ax.tick_params(labelsize=8)
         if xlim is not None:
@@ -945,8 +961,11 @@ def margin_moves(df: pd.DataFrame, question_key: str, suffix: str = "", x_field:
                         Line2D([], [], marker="o", linestyle="", color="black", alpha=0.5, label="clean (identity)")],
                loc="lower center", ncol=3, fontsize=8, frameon=False)
     fig.suptitle(f"Where each edit moved the answer -- {question_key}{suffix}\none line per cell, from its prompt's "
-                 "clean margin to the edited margin; dashed line = the flip boundary", fontsize=9)
-    fig.tight_layout(rect=(0, 0.07, 1, 0.88))
+                 "clean margin to the edited margin; dashed line = the flip boundary\n"
+                 "p: two-sided Wilcoxon signed-rank (scipy, zero differences kept), clean vs edited margin over "
+                 "the lines in that panel",
+                 fontsize=9)
+    fig.tight_layout(rect=(0, 0.07, 1, 0.86))
     return fig
 
 

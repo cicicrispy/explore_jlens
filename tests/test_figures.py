@@ -153,9 +153,15 @@ def test_moves_draws_a_figure_per_question_pooled_and_per_language(tmp_path):
     rows = figures.move_rows(figures.read_records(tmp_path))
     assert set(rows["kind"]) == {"swap", "label_to_present", "big_nonlabel", "random_direction"}
     assert (rows["clean_margin"] != rows["margin"]).any()        # a line with two distinct ends
+    pytest.importorskip("scipy.stats")
     fig = figures.margin_moves(figures.read_records(tmp_path), "anomaly")
-    assert [ax.get_title() for ax in fig.axes] == \
+    titles = [ax.get_title() for ax in fig.axes]
+    assert [t.split("\n")[0] for t in titles] == \
         [figures.KIND_LABELS[k] for k in ("swap", "label_to_present", "big_nonlabel", "random_direction")]
+    # one p per panel, over the lines drawn there: swap has one m2i cell per passage (2), the
+    # synthetic label_to_present one token x 2 directions x 2 passages (4)
+    assert titles[0].split("\n")[1].startswith("p ") and titles[0].endswith("(n = 2)")
+    assert titles[1].endswith("(n = 4)")
 
 
 def test_presentation_figures_count_an_edit_made_the_same_in_both_directions_once(tmp_path):

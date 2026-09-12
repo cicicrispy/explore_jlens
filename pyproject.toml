@@ -21,6 +21,7 @@ dependencies = [
   "pyarrow",
   "matplotlib",
   "numpy",
+  "scipy",  # scipy.stats.wilcoxon: the per-panel p on the margin_moves figures
   "pytest",
   "tqdm",
 ]
